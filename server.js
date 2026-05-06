@@ -194,7 +194,7 @@ app.get("/robots.txt", (req, res) => {
 
 app.get("/", (req, res) => {
   noStore(res);
-  res.status(404).send("Not found");
+  res.redirect(302, SECRET_PATH);
 });
 
 app.get(SECRET_PATH, (req, res) => {
