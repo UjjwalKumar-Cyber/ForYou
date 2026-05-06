@@ -1,7 +1,7 @@
 {
-  "name": "private-anonymous-love-notes",
+  "name": "foryou",
   "version": "1.0.0",
-  "description": "A private anonymous messaging website with password protection, admin-only message viewing, and JSON storage.",
+  "description": "ForyoU, a private anonymous messaging website with password protection, admin-only message viewing, and JSON storage.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

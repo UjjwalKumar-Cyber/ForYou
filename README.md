@@ -1,11 +1,11 @@
-# Private Anonymous Love Notes
+# ForyoU
 
-A complete Node.js and Express private anonymous messaging site. The secret page is password-protected, accepts anonymous notes up to 500 characters, stores them with timestamps in a local JSON file, and exposes an admin-only dashboard for reading and deleting messages.
+ForyoU is a complete Node.js and Express private anonymous messaging site. The secret page is password-protected, accepts anonymous notes up to 500 characters, stores them with timestamps in a local JSON file, and exposes an admin-only dashboard for reading and deleting messages.
 
 ## Folder Structure
 
 ```text
-private-anonymous-love-notes/
+foryou/
 ├── data/
 │   ├── .gitkeep
 │   └── messages.json
@@ -29,6 +29,7 @@ private-anonymous-love-notes/
 ├── .gitignore
 ├── package.json
 ├── README.md
+├── render.yaml
 └── server.js
 ```
 
@@ -125,7 +126,22 @@ or:
 
 ## Render Deployment
 
-1. Push this project to a GitHub repository.
+### Option 1: Render Blueprint
+
+This repo includes `render.yaml`, so Render can create the service with the correct build command, start command, persistent disk, and production environment settings.
+
+1. Push this project to a GitHub repository named `ForyoU` or `foryou`.
+2. In Render, choose **New +** and then **Blueprint**.
+3. Connect your GitHub repository.
+4. Render will read `render.yaml`.
+5. When Render asks for secret values, add:
+   - `MESSAGE_PAGE_PASSWORD`
+   - `ADMIN_PASSWORD`
+6. Deploy.
+
+### Option 2: Manual Web Service
+
+1. Push this project to a GitHub repository named `ForyoU` or `foryou`.
 2. In Render, create a new **Web Service** from that repository.
 3. Use these settings:
    - Environment: `Node`
@@ -144,8 +160,8 @@ or:
 
 After deployment:
 
-- Secret page: `https://your-app.onrender.com/secret-8392-love-note`
-- Admin page: `https://your-app.onrender.com/admin`
+- Secret page: `https://foryou.onrender.com/secret-8392-love-note` or your Render-generated URL
+- Admin page: `https://foryou.onrender.com/admin` or your Render-generated URL
 
 ## Notes
 
