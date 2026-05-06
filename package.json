@@ -1,0 +1,21 @@
+{
+  "name": "private-anonymous-love-notes",
+  "version": "1.0.0",
+  "description": "A private anonymous messaging website with password protection, admin-only message viewing, and JSON storage.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=18.18.0"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "express-session": "^1.18.1",
+    "helmet": "^8.0.0",
+    "sanitize-html": "^2.14.0"
+  }
+}

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Admin Messages</title>
+    <link rel="stylesheet" href="/css/styles.css">
+  </head>
+  <body>
+    <main class="page-shell admin-shell">
+      <section class="card admin-login-card" id="admin-login-panel" aria-labelledby="admin-login-title">
+        <img class="seal" src="/assets/seal.svg" alt="" width="76" height="76">
+        <p class="eyebrow">Admin</p>
+        <h1 id="admin-login-title">Private archive</h1>
+        <p class="soft-copy">The letters stay locked until you open them.</p>
+
+        <form class="stack" id="admin-login-form" novalidate>
+          <input type="hidden" name="scope" value="admin">
+
+          <label class="field-label" for="admin-password">Admin password</label>
+          <input
+            class="text-input"
+            id="admin-password"
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            required
+          >
+
+          <p class="form-message" id="admin-login-message" role="status" aria-live="polite"></p>
+
+          <button class="button primary-button" type="submit">Open archive</button>
+        </form>
+      </section>
+
+      <section class="admin-panel is-hidden" id="messages-panel" aria-labelledby="messages-title">
+        <div class="admin-header">
+          <div>
+            <p class="eyebrow">Admin</p>
+            <h1 id="messages-title">Anonymous messages</h1>
+          </div>
+          <button class="button secondary-button" id="refresh-button" type="button">Refresh</button>
+        </div>
+
+        <p class="form-message" id="admin-status" role="status" aria-live="polite"></p>
+        <div class="message-list" id="message-list"></div>
+      </section>
+    </main>
+
+    <template id="message-template">
+      <article class="message-card">
+        <div class="message-card-header">
+          <time class="message-time"></time>
+          <button class="delete-button" type="button">Delete</button>
+        </div>
+        <p class="message-text"></p>
+      </article>
+    </template>
+
+    <script src="/js/admin.js" defer></script>
+  </body>
+</html>

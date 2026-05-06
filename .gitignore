@@ -1,0 +1,7 @@
+node_modules/
+.env
+npm-debug.log*
+.DS_Store
+
+# Runtime message storage. Keep the folder, not private messages.
+data/messages.json

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Send a Secret Note</title>
+    <link rel="stylesheet" href="/css/styles.css">
+  </head>
+  <body>
+    <main class="page-shell message-shell">
+      <section class="card note-card" aria-labelledby="message-title">
+        <div class="card-topline">
+          <img class="mini-seal" src="/assets/seal.svg" alt="" width="44" height="44">
+          <p class="eyebrow">Anonymous note</p>
+        </div>
+
+        <h1 id="message-title">Leave what your heart keeps replaying.</h1>
+        <p class="soft-copy">Say it softly, and let it arrive.</p>
+
+        <form class="stack" id="message-form" novalidate>
+          <label class="field-label" for="message">Message</label>
+          <textarea
+            class="textarea"
+            id="message"
+            name="message"
+            maxlength="500"
+            rows="8"
+            required
+          ></textarea>
+
+          <div class="form-row">
+            <p class="form-message" id="message-status" role="status" aria-live="polite"></p>
+            <p class="counter"><span id="character-count">0</span>/500</p>
+          </div>
+
+          <button class="button primary-button" type="submit">Send anonymously</button>
+        </form>
+      </section>
+    </main>
+
+    <script src="/js/message.js" defer></script>
+  </body>
+</html>
