@@ -1,6 +1,8 @@
 # ForyoU
 
-ForyoU is a complete Node.js and Express private anonymous messaging site. The secret page is password-protected, accepts anonymous notes up to 500 characters, stores them with timestamps in a local JSON file, and exposes an admin-only dashboard for reading and deleting messages.
+ForyoU is a complete Node.js and Express private anonymous messaging site. The secret page is password-protected, accepts anonymous notes up to 500 characters, stores them with timestamps, and exposes an admin-only dashboard for reading and deleting messages.
+
+Locally, messages are saved in `data/messages.json`. On Render, the included Blueprint uses Render Postgres through `DATABASE_URL` so the app can run on Render's free web service plan.
 
 ## Folder Structure
 
@@ -39,6 +41,7 @@ foryou/
 - Password screen before the message page
 - Anonymous message form with a 500 character limit
 - Timestamped message storage in `data/messages.json`
+- Render deployment stores messages in Postgres when `DATABASE_URL` is present
 - Admin-only message dashboard at `/admin`
 - Admin delete button for each message
 - `helmet` security headers
@@ -128,7 +131,7 @@ or:
 
 ### Option 1: Render Blueprint
 
-This repo includes `render.yaml`, so Render can create the service with the correct build command, start command, persistent disk, and production environment settings.
+This repo includes `render.yaml`, so Render can create the web service, a Postgres database, and the required production environment settings.
 
 1. Push this project to a GitHub repository named `ForyoU` or `foryou`.
 2. In Render, choose **New +** and then **Blueprint**.
@@ -138,6 +141,14 @@ This repo includes `render.yaml`, so Render can create the service with the corr
    - `MESSAGE_PAGE_PASSWORD`
    - `ADMIN_PASSWORD`
 6. Deploy.
+
+The Blueprint uses:
+
+- Web service plan: `free`
+- Database plan: `free`
+- Database access: internal/private only
+
+Render's free Postgres databases expire 30 days after creation. Upgrade the database before then if you want to keep messages long-term.
 
 ### Option 2: Manual Web Service
 
@@ -153,9 +164,8 @@ This repo includes `render.yaml`, so Render can create the service with the corr
    - `ADMIN_PASSWORD=your-admin-password`
    - `SESSION_SECRET=a-long-random-string`
    - `DATA_DIR=/var/data`
-5. Add a Render persistent disk:
-   - Mount path: `/var/data`
-   - Size: any small size is fine for text messages
+5. Create a Render Postgres database and add its internal connection string as:
+   - `DATABASE_URL=your-render-postgres-connection-string`
 6. Deploy.
 
 After deployment:
@@ -165,7 +175,7 @@ After deployment:
 
 ## Notes
 
-Messages are stored as:
+Local JSON messages are stored as:
 
 ```json
 {

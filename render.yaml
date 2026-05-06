@@ -2,21 +2,26 @@ services:
   - type: web
     name: foryou
     runtime: node
-    plan: starter
+    plan: free
     buildCommand: npm install
     startCommand: npm start
-    disk:
-      name: foryou-messages
-      mountPath: /var/data
-      sizeGB: 1
     envVars:
       - key: NODE_ENV
         value: production
-      - key: DATA_DIR
-        value: /var/data
+      - key: DATABASE_URL
+        fromDatabase:
+          name: foryou-db
+          property: connectionString
       - key: SESSION_SECRET
         generateValue: true
       - key: MESSAGE_PAGE_PASSWORD
         sync: false
       - key: ADMIN_PASSWORD
         sync: false
+
+databases:
+  - name: foryou-db
+    plan: free
+    databaseName: foryou
+    user: foryou
+    ipAllowList: []

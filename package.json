@@ -16,6 +16,7 @@
     "express-rate-limit": "^7.5.0",
     "express-session": "^1.18.1",
     "helmet": "^8.0.0",
+    "pg": "^8.20.0",
     "sanitize-html": "^2.14.0"
   }
 }
