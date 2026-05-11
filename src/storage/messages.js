@@ -44,14 +44,18 @@ function normalizeUsername(username) {
 }
 
 function parseSeedUsers() {
-  const users = [...builtInUsers];
+  const users = builtInUsers.map((user) => ({
+    ...user,
+    seedType: "built-in"
+  }));
   const adminPassword = process.env.ADMIN_PASSWORD;
 
   if (adminPassword) {
     users.push({
       username: normalizeUsername(process.env.ADMIN_USERNAME || "admin"),
       displayName: String(process.env.ADMIN_DISPLAY_NAME || process.env.ADMIN_USERNAME || "Admin").trim(),
-      password: adminPassword
+      password: adminPassword,
+      seedType: "configured"
     });
   }
 
@@ -67,7 +71,8 @@ function parseSeedUsers() {
       users.push({
         username,
         displayName: displayName || username,
-        password
+        password,
+        seedType: "configured"
       });
     }
   }
@@ -215,13 +220,20 @@ function queuedWrite(task) {
 }
 
 async function seedUsers() {
-  const seedUsersList = parseSeedUsers();
+  let seedUsersList = parseSeedUsers();
 
   if (!seedUsersList.length) {
     return;
   }
 
   if (usePostgres) {
+    const countResult = await pool.query("SELECT count(*)::int AS count FROM inbox_users");
+    const hasExistingUsers = Number(countResult.rows[0] && countResult.rows[0].count) > 0;
+
+    if (hasExistingUsers) {
+      seedUsersList = seedUsersList.filter((user) => user.seedType !== "built-in");
+    }
+
     for (const user of seedUsersList) {
       await pool.query(
         `
@@ -238,6 +250,11 @@ async function seedUsers() {
 
   await queuedWrite(async () => {
     const store = await readJsonStore(false);
+    const hasExistingUsers = store.users.length > 0;
+
+    if (hasExistingUsers) {
+      seedUsersList = seedUsersList.filter((user) => user.seedType !== "built-in");
+    }
 
     for (const user of seedUsersList) {
       const existingUser = store.users.find((item) => item.username === user.username);
@@ -330,6 +347,129 @@ async function authenticateUser(username, password) {
     username: user.username,
     displayName: user.displayName
   };
+}
+
+async function updateUserProfile(currentUsername, nextUsername, displayName) {
+  const normalizedCurrentUsername = normalizeUsername(currentUsername);
+  const normalizedNextUsername = normalizeUsername(nextUsername);
+  const nextDisplayName = String(displayName || nextUsername || normalizedNextUsername).trim();
+
+  if (!normalizedCurrentUsername || !normalizedNextUsername || !nextDisplayName) {
+    return null;
+  }
+
+  if (usePostgres) {
+    await initStore();
+    const client = await pool.connect();
+
+    try {
+      await client.query("BEGIN");
+
+      const existing = await client.query(
+        "SELECT username FROM inbox_users WHERE username = $1 AND username <> $2",
+        [normalizedNextUsername, normalizedCurrentUsername]
+      );
+
+      if (existing.rowCount > 0) {
+        await client.query("ROLLBACK");
+        return null;
+      }
+
+      const result = await client.query(
+        `
+          UPDATE inbox_users
+          SET username = $1, display_name = $2
+          WHERE username = $3
+          RETURNING username, display_name AS "displayName"
+        `,
+        [normalizedNextUsername, nextDisplayName, normalizedCurrentUsername]
+      );
+
+      if (result.rowCount === 0) {
+        await client.query("ROLLBACK");
+        return null;
+      }
+
+      if (normalizedCurrentUsername !== normalizedNextUsername) {
+        await client.query(
+          "UPDATE messages SET recipient_username = $1 WHERE recipient_username = $2",
+          [normalizedNextUsername, normalizedCurrentUsername]
+        );
+      }
+
+      await client.query("COMMIT");
+      return result.rows[0];
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  return queuedWrite(async () => {
+    const store = await readJsonStore();
+    const user = store.users.find((item) => item.username === normalizedCurrentUsername);
+
+    if (!user) {
+      return null;
+    }
+
+    const usernameTaken = store.users.some(
+      (item) => item.username === normalizedNextUsername && item.username !== normalizedCurrentUsername
+    );
+
+    if (usernameTaken) {
+      return null;
+    }
+
+    user.username = normalizedNextUsername;
+    user.displayName = nextDisplayName;
+
+    for (const message of store.messages) {
+      if (message.recipientUsername === normalizedCurrentUsername) {
+        message.recipientUsername = normalizedNextUsername;
+      }
+    }
+
+    await writeJsonStore(store);
+    return {
+      username: user.username,
+      displayName: user.displayName
+    };
+  });
+}
+
+async function updateUserPassword(username, password) {
+  const normalizedUsername = normalizeUsername(username);
+  const passwordHash = hashPassword(password);
+
+  if (!normalizedUsername) {
+    return false;
+  }
+
+  if (usePostgres) {
+    await initStore();
+    const result = await pool.query(
+      "UPDATE inbox_users SET password_hash = $1 WHERE username = $2",
+      [passwordHash, normalizedUsername]
+    );
+
+    return result.rowCount > 0;
+  }
+
+  return queuedWrite(async () => {
+    const store = await readJsonStore();
+    const user = store.users.find((item) => item.username === normalizedUsername);
+
+    if (!user) {
+      return false;
+    }
+
+    user.passwordHash = passwordHash;
+    await writeJsonStore(store);
+    return true;
+  });
 }
 
 async function listMessagesForUser(username) {
@@ -454,5 +594,7 @@ module.exports = {
   initStore,
   listMessagesForUser,
   listUsers,
-  normalizeUsername
+  normalizeUsername,
+  updateUserPassword,
+  updateUserProfile
 };

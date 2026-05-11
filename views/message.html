@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="robots" content="noindex, nofollow">
     <title>ForyoU Secret Note</title>
-    <link rel="stylesheet" href="/css/styles.css?v=20260512-1">
+    <link rel="stylesheet" href="/css/styles.css?v=20260512-2">
   </head>
   <body>
     <main class="page-shell message-shell">
@@ -44,16 +44,23 @@
             rows="8"
           ></textarea>
 
-          <label class="field-label" for="message-image">Photo</label>
-          <div class="file-control">
+          <label class="field-label" for="message-gallery-image">Photo</label>
+          <div class="photo-actions">
             <input
-              class="file-input"
-              id="message-image"
-              name="image"
+              class="visually-hidden"
+              id="message-gallery-image"
+              type="file"
+              accept="image/*"
+            >
+            <label class="photo-action" for="message-gallery-image">Choose photo</label>
+            <input
+              class="visually-hidden"
+              id="message-camera-image"
               type="file"
               accept="image/*"
               capture="environment"
             >
+            <label class="photo-action primary-photo-action" for="message-camera-image">Click photo</label>
             <button class="clear-file-button" id="clear-message-image" type="button">Clear</button>
           </div>
           <p class="file-hint" id="message-image-name">Optional photo or camera capture, up to 3 MB.</p>
@@ -68,6 +75,6 @@
       </section>
     </main>
 
-    <script src="/js/message.js?v=20260512-1" defer></script>
+    <script src="/js/message.js?v=20260512-2" defer></script>
   </body>
 </html>

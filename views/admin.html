@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="robots" content="noindex, nofollow">
     <title>ForyoU Admin</title>
-    <link rel="stylesheet" href="/css/styles.css?v=20260512-1">
+    <link rel="stylesheet" href="/css/styles.css?v=20260512-2">
   </head>
   <body>
     <main class="page-shell admin-shell">
@@ -70,13 +70,56 @@
             <div>
               <p class="eyebrow">Account</p>
               <div class="drawer-user-row">
-                <span class="presence-dot is-active" aria-hidden="true"></span>
+                <span class="presence-dot is-active" id="account-presence-dot" aria-hidden="true"></span>
                 <h2 id="inbox-user">Signed in</h2>
               </div>
             </div>
             <button class="close-button" id="account-menu-close" type="button" aria-label="Close account menu">Close</button>
           </div>
           <p class="presence-line drawer-presence"><span id="active-status">Active now</span></p>
+          <div class="drawer-section">
+            <p class="drawer-label">Settings</p>
+            <label class="toggle-row" for="hide-active-toggle">
+              <input id="hide-active-toggle" type="checkbox">
+              <span>
+                <strong>Hide active status</strong>
+                <small>Others will see you as offline.</small>
+              </span>
+              <span class="toggle-track" aria-hidden="true"></span>
+            </label>
+            <p class="file-hint" id="privacy-status"></p>
+          </div>
+          <form class="drawer-section drawer-form" id="account-profile-form" novalidate>
+            <label class="drawer-label" for="account-username">Username</label>
+            <input
+              class="text-input compact-input"
+              id="account-username"
+              name="username"
+              type="text"
+              minlength="3"
+              maxlength="32"
+              autocomplete="username"
+              required
+            >
+            <p class="file-hint">Used for login. Letters, numbers, dot, dash, underscore.</p>
+            <p class="file-hint" id="profile-status" role="status" aria-live="polite"></p>
+            <button class="button secondary-button" id="save-profile-button" type="submit">Save username</button>
+          </form>
+          <form class="drawer-section drawer-form" id="account-password-form" novalidate>
+            <label class="drawer-label" for="account-new-password">Password</label>
+            <input
+              class="text-input compact-input"
+              id="account-new-password"
+              name="password"
+              type="password"
+              minlength="4"
+              maxlength="128"
+              autocomplete="new-password"
+              required
+            >
+            <p class="file-hint" id="password-status" role="status" aria-live="polite"></p>
+            <button class="button secondary-button" id="save-password-button" type="submit">Save password</button>
+          </form>
           <div class="drawer-actions">
             <button class="button secondary-button" id="refresh-button" type="button">Refresh</button>
             <button class="button secondary-button" id="logout-button" type="button">Logout</button>
@@ -85,11 +128,21 @@
 
         <p class="form-message" id="admin-status" role="status" aria-live="polite"></p>
 
+        <div class="inbox-topline">
+          <div>
+            <p class="eyebrow">Inbox</p>
+            <h2>Latest messages</h2>
+          </div>
+          <button class="button secondary-button compact-button" id="compose-jump-button" type="button">Write</button>
+        </div>
+
+        <div class="message-list" id="message-list"></div>
+
         <form class="compose-panel" id="account-message-form" novalidate>
           <div class="compose-heading">
             <div>
               <p class="eyebrow">Send</p>
-              <h2>Write a message</h2>
+              <h2>Quick message</h2>
             </div>
           </div>
 
@@ -108,16 +161,23 @@
               rows="5"
             ></textarea>
 
-            <label class="field-label" for="account-image">Photo</label>
-            <div class="file-control">
+            <label class="field-label" for="account-gallery-image">Photo</label>
+            <div class="photo-actions">
               <input
-                class="file-input"
-                id="account-image"
-                name="image"
+                class="visually-hidden"
+                id="account-gallery-image"
+                type="file"
+                accept="image/*"
+              >
+              <label class="photo-action" for="account-gallery-image">Choose photo</label>
+              <input
+                class="visually-hidden"
+                id="account-camera-image"
                 type="file"
                 accept="image/*"
                 capture="environment"
               >
+              <label class="photo-action primary-photo-action" for="account-camera-image">Click photo</label>
               <button class="clear-file-button" id="clear-account-image" type="button">Clear</button>
             </div>
             <p class="file-hint" id="account-image-name">Optional photo or camera capture, up to 3 MB.</p>
@@ -130,20 +190,23 @@
             <button class="button primary-button" id="account-send-button" type="submit">Send message</button>
           </div>
         </form>
-
-        <div class="message-list" id="message-list"></div>
       </section>
     </main>
 
     <template id="message-template">
       <article class="message-card">
         <div class="message-card-header">
-          <div>
-            <p class="message-sender"></p>
-            <time class="message-time"></time>
+          <div class="message-identity">
+            <span class="sender-avatar" aria-hidden="true"></span>
+            <div>
+              <p class="message-sender"></p>
+              <time class="message-time"></time>
+            </div>
           </div>
-          <span class="new-badge is-hidden">New</span>
-          <button class="delete-button" type="button">Delete</button>
+          <div class="message-card-actions">
+            <span class="new-badge is-hidden">New</span>
+            <button class="delete-button" type="button">Delete</button>
+          </div>
         </div>
         <p class="message-text"></p>
         <div class="message-media is-hidden">
@@ -152,6 +215,6 @@
       </article>
     </template>
 
-    <script src="/js/admin.js?v=20260512-1" defer></script>
+    <script src="/js/admin.js?v=20260512-2" defer></script>
   </body>
 </html>

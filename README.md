@@ -48,6 +48,8 @@ foryou/
 - Logged-in accounts can send messages to other inbox accounts
 - Auto-refreshing messages
 - Active status indicators for signed-in users
+- Account setting to hide active status from other users
+- Account settings to change username and password
 - New incoming messages are highlighted in each account
 - Clean side menu for username, active status, refresh, and logout
 - Logout button
@@ -133,6 +135,9 @@ GET    /api/session
 GET    /api/recipients
 GET    /api/messages
 DELETE /api/messages/:id
+PATCH  /api/settings/active-status
+PATCH  /api/account/profile
+PATCH  /api/account/password
 POST   /api/logout
 ```
 

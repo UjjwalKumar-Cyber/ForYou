@@ -17,7 +17,9 @@ const {
   initStore,
   listMessagesForUser,
   listUsers,
-  normalizeUsername
+  normalizeUsername,
+  updateUserPassword,
+  updateUserProfile
 } = require("./src/storage/messages");
 
 const app = express();
@@ -256,6 +258,14 @@ function cleanSenderName(input) {
   return cleanText(input);
 }
 
+function cleanDisplayName(input) {
+  return cleanText(input);
+}
+
+function isValidAccountUsername(input) {
+  return /^[a-zA-Z0-9_.-]{3,32}$/.test(String(input || "").trim());
+}
+
 function pruneActiveUsers(now = Date.now()) {
   for (const [username, record] of activeUsers.entries()) {
     if (!record || now - record.lastActiveAt > ACTIVE_WINDOW_MS) {
@@ -274,7 +284,7 @@ function isUserActive(username) {
   }
 
   const record = activeUsers.get(normalizedUsername);
-  return Boolean(record && now - record.lastActiveAt <= ACTIVE_WINDOW_MS);
+  return Boolean(record && !record.hideActiveStatus && now - record.lastActiveAt <= ACTIVE_WINDOW_MS);
 }
 
 function markUserActive(user) {
@@ -285,6 +295,7 @@ function markUserActive(user) {
   }
 
   activeUsers.set(username, {
+    hideActiveStatus: Boolean(user.hideActiveStatus),
     lastActiveAt: Date.now()
   });
 }
@@ -341,11 +352,13 @@ function handleImageUpload(req, res, next) {
 
 function publicAccount(user) {
   const username = normalizeUsername(user.username);
+  const hideActiveStatus = Boolean(user.hideActiveStatus);
 
   return {
     username,
     displayName: user.displayName || user.username,
-    isActive: isUserActive(username)
+    hideActiveStatus,
+    isActive: !hideActiveStatus && isUserActive(username)
   };
 }
 
@@ -476,6 +489,90 @@ app.get("/api/session", (req, res) => {
   return res.json({
     user: req.session.accountUser ? publicAccount(req.session.accountUser) : null
   });
+});
+
+app.patch("/api/settings/active-status", requireAccount, (req, res) => {
+  noStore(res);
+
+  const hideActiveStatus = Boolean(req.body && req.body.hideActiveStatus);
+  req.session.accountUser.hideActiveStatus = hideActiveStatus;
+  markUserActive(req.session.accountUser);
+
+  return res.json({
+    ok: true,
+    user: publicAccount(req.session.accountUser)
+  });
+});
+
+app.patch("/api/account/profile", requireAccount, async (req, res, next) => {
+  noStore(res);
+
+  const rawUsername = String((req.body && req.body.username) || "").trim();
+  const displayName = cleanDisplayName(rawUsername);
+  const currentUsername = req.session.accountUser.username;
+
+  if (!isValidAccountUsername(rawUsername)) {
+    return res.status(400).json({
+      error: "Username must be 3-32 characters using letters, numbers, dot, dash, or underscore."
+    });
+  }
+
+  try {
+    const updatedUser = await updateUserProfile(currentUsername, rawUsername, displayName);
+
+    if (!updatedUser) {
+      return res.status(409).json({ error: "That username is already taken." });
+    }
+
+    const oldActiveRecord = activeUsers.get(normalizeUsername(currentUsername));
+    activeUsers.delete(normalizeUsername(currentUsername));
+    req.session.accountUser = {
+      ...publicAccount({
+        ...updatedUser,
+        hideActiveStatus: req.session.accountUser.hideActiveStatus
+      }),
+      hideActiveStatus: Boolean(req.session.accountUser.hideActiveStatus)
+    };
+
+    if (oldActiveRecord) {
+      activeUsers.set(req.session.accountUser.username, {
+        ...oldActiveRecord,
+        hideActiveStatus: req.session.accountUser.hideActiveStatus,
+        lastActiveAt: Date.now()
+      });
+    } else {
+      markUserActive(req.session.accountUser);
+    }
+
+    return res.json({
+      ok: true,
+      user: publicAccount(req.session.accountUser)
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.patch("/api/account/password", requireAccount, async (req, res, next) => {
+  noStore(res);
+
+  const password = String((req.body && req.body.password) || "");
+
+  if (password.length < 4 || password.length > 128) {
+    return res.status(400).json({ error: "Password must be 4-128 characters." });
+  }
+
+  try {
+    const updated = await updateUserPassword(req.session.accountUser.username, password);
+
+    if (!updated) {
+      return res.status(404).json({ error: "Account was not found." });
+    }
+
+    return res.json({ ok: true, message: "Password updated." });
+  } catch (error) {
+    return next(error);
+  }
 });
 
 app.post("/api/logout", (req, res, next) => {

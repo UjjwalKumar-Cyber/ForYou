@@ -2,7 +2,8 @@ const form = document.querySelector("#message-form");
 const senderNameInput = document.querySelector("#sender-name");
 const recipientSelect = document.querySelector("#recipient");
 const textarea = document.querySelector("#message");
-const imageInput = document.querySelector("#message-image");
+const galleryImageInput = document.querySelector("#message-gallery-image");
+const cameraImageInput = document.querySelector("#message-camera-image");
 const clearImageButton = document.querySelector("#clear-message-image");
 const imageName = document.querySelector("#message-image-name");
 const counter = document.querySelector("#character-count");
@@ -72,8 +73,13 @@ async function loadRecipients() {
   }
 }
 
-function selectedImageError() {
-  const file = imageInput.files && imageInput.files[0];
+function selectedImageFile() {
+  return (cameraImageInput.files && cameraImageInput.files[0])
+    || (galleryImageInput.files && galleryImageInput.files[0])
+    || null;
+}
+
+function selectedImageError(file) {
 
   if (!file) {
     return "";
@@ -91,17 +97,18 @@ function selectedImageError() {
 }
 
 function updateImageName() {
-  const file = imageInput.files && imageInput.files[0];
+  const file = selectedImageFile();
 
   if (!file) {
     imageName.textContent = "Optional photo or camera capture, up to 3 MB.";
     return;
   }
 
-  const error = selectedImageError();
+  const error = selectedImageError(file);
 
   if (error) {
-    imageInput.value = "";
+    galleryImageInput.value = "";
+    cameraImageInput.value = "";
     imageName.textContent = "Optional photo or camera capture, up to 3 MB.";
     setStatus(error, "error");
     return;
@@ -112,9 +119,21 @@ function updateImageName() {
 }
 
 textarea.addEventListener("input", updateCounter);
-imageInput.addEventListener("change", updateImageName);
+galleryImageInput.addEventListener("change", () => {
+  if (galleryImageInput.files && galleryImageInput.files[0]) {
+    cameraImageInput.value = "";
+  }
+  updateImageName();
+});
+cameraImageInput.addEventListener("change", () => {
+  if (cameraImageInput.files && cameraImageInput.files[0]) {
+    galleryImageInput.value = "";
+  }
+  updateImageName();
+});
 clearImageButton.addEventListener("click", () => {
-  imageInput.value = "";
+  galleryImageInput.value = "";
+  cameraImageInput.value = "";
   updateImageName();
 });
 updateCounter();
@@ -127,8 +146,8 @@ form.addEventListener("submit", async (event) => {
   const senderName = senderNameInput.value.trim();
   const recipientUsername = recipientSelect.value;
   const message = textarea.value.trim();
-  const imageFile = imageInput.files && imageInput.files[0];
-  const imageError = selectedImageError();
+  const imageFile = selectedImageFile();
+  const imageError = selectedImageError(imageFile);
 
   if (!senderName) {
     setStatus("Add your name first.", "error");
@@ -186,7 +205,8 @@ form.addEventListener("submit", async (event) => {
     }
 
     textarea.value = "";
-    imageInput.value = "";
+    galleryImageInput.value = "";
+    cameraImageInput.value = "";
     updateCounter();
     updateImageName();
     setStatus(result.message || "Sent.", "success");

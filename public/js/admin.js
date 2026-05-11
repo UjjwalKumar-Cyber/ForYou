@@ -12,7 +12,8 @@ const template = document.querySelector("#message-template");
 const accountMessageForm = document.querySelector("#account-message-form");
 const accountRecipient = document.querySelector("#account-recipient");
 const accountMessage = document.querySelector("#account-message");
-const accountImage = document.querySelector("#account-image");
+const accountGalleryImage = document.querySelector("#account-gallery-image");
+const accountCameraImage = document.querySelector("#account-camera-image");
 const clearAccountImage = document.querySelector("#clear-account-image");
 const accountImageName = document.querySelector("#account-image-name");
 const accountSendButton = document.querySelector("#account-send-button");
@@ -22,6 +23,18 @@ const menuButton = document.querySelector("#account-menu-button");
 const closeMenuButton = document.querySelector("#account-menu-close");
 const accountDrawer = document.querySelector("#account-drawer");
 const drawerBackdrop = document.querySelector("#drawer-backdrop");
+const accountPresenceDot = document.querySelector("#account-presence-dot");
+const hideActiveToggle = document.querySelector("#hide-active-toggle");
+const privacyStatus = document.querySelector("#privacy-status");
+const accountProfileForm = document.querySelector("#account-profile-form");
+const accountUsername = document.querySelector("#account-username");
+const profileStatus = document.querySelector("#profile-status");
+const saveProfileButton = document.querySelector("#save-profile-button");
+const accountPasswordForm = document.querySelector("#account-password-form");
+const accountNewPassword = document.querySelector("#account-new-password");
+const passwordStatus = document.querySelector("#password-status");
+const savePasswordButton = document.querySelector("#save-password-button");
+const composeJumpButton = document.querySelector("#compose-jump-button");
 
 const REFRESH_MS = 5000;
 const IMAGE_MAX_BYTES = 3 * 1024 * 1024;
@@ -45,6 +58,11 @@ function setAccountMessageStatus(text, type) {
   accountMessageStatus.dataset.type = type;
 }
 
+function setInlineStatus(element, text, type = "neutral") {
+  element.textContent = text;
+  element.dataset.type = type;
+}
+
 function countCharacters(value) {
   return Array.from(value).length;
 }
@@ -63,7 +81,14 @@ function updateAccountHeader() {
   }
 
   inboxUser.textContent = currentUser.displayName || currentUser.username;
-  activeStatus.textContent = currentUser.isActive ? "Active now" : "Recently active";
+  accountUsername.value = currentUser.displayName || currentUser.username;
+  hideActiveToggle.checked = Boolean(currentUser.hideActiveStatus);
+  activeStatus.textContent = currentUser.hideActiveStatus
+    ? "Hidden from others"
+    : currentUser.isActive
+      ? "Active now"
+      : "Recently active";
+  accountPresenceDot.classList.toggle("is-active", !currentUser.hideActiveStatus && currentUser.isActive);
 }
 
 function showMessagesPanel() {
@@ -185,6 +210,7 @@ function renderMessages(messages) {
   for (const message of messages) {
     const node = template.content.firstElementChild.cloneNode(true);
     const sender = node.querySelector(".message-sender");
+    const avatar = node.querySelector(".sender-avatar");
     const time = node.querySelector(".message-time");
     const text = node.querySelector(".message-text");
     const media = node.querySelector(".message-media");
@@ -194,6 +220,7 @@ function renderMessages(messages) {
     const isNew = !firstLoad && !seen.has(String(message.id));
 
     sender.textContent = message.senderName || "Anonymous";
+    avatar.textContent = (message.senderName || "A").trim().slice(0, 1).toUpperCase();
     time.dateTime = message.createdAt;
     time.textContent = formatDate(message.createdAt);
 
@@ -380,8 +407,13 @@ async function loadMessages(options = {}) {
   }
 }
 
-function selectedImageError(input) {
-  const file = input.files && input.files[0];
+function selectedAccountImageFile() {
+  return (accountCameraImage.files && accountCameraImage.files[0])
+    || (accountGalleryImage.files && accountGalleryImage.files[0])
+    || null;
+}
+
+function selectedImageError(file) {
 
   if (!file) {
     return "";
@@ -399,17 +431,18 @@ function selectedImageError(input) {
 }
 
 function updateAccountImageName() {
-  const file = accountImage.files && accountImage.files[0];
+  const file = selectedAccountImageFile();
 
   if (!file) {
     accountImageName.textContent = "Optional photo or camera capture, up to 3 MB.";
     return;
   }
 
-  const error = selectedImageError(accountImage);
+  const error = selectedImageError(file);
 
   if (error) {
-    accountImage.value = "";
+    accountGalleryImage.value = "";
+    accountCameraImage.value = "";
     accountImageName.textContent = "Optional photo or camera capture, up to 3 MB.";
     setAccountMessageStatus(error, "error");
     return;
@@ -484,10 +517,26 @@ document.addEventListener("keydown", (event) => {
 });
 
 accountMessage.addEventListener("input", updateAccountCounter);
-accountImage.addEventListener("change", updateAccountImageName);
-clearAccountImage.addEventListener("click", () => {
-  accountImage.value = "";
+accountGalleryImage.addEventListener("change", () => {
+  if (accountGalleryImage.files && accountGalleryImage.files[0]) {
+    accountCameraImage.value = "";
+  }
   updateAccountImageName();
+});
+accountCameraImage.addEventListener("change", () => {
+  if (accountCameraImage.files && accountCameraImage.files[0]) {
+    accountGalleryImage.value = "";
+  }
+  updateAccountImageName();
+});
+clearAccountImage.addEventListener("click", () => {
+  accountGalleryImage.value = "";
+  accountCameraImage.value = "";
+  updateAccountImageName();
+});
+composeJumpButton.addEventListener("click", () => {
+  accountMessageForm.scrollIntoView({ behavior: "smooth", block: "start" });
+  accountMessage.focus();
 });
 updateAccountCounter();
 updateAccountImageName();
@@ -497,8 +546,8 @@ accountMessageForm.addEventListener("submit", async (event) => {
 
   const recipientUsername = accountRecipient.value;
   const message = accountMessage.value.trim();
-  const imageError = selectedImageError(accountImage);
-  const imageFile = accountImage.files && accountImage.files[0];
+  const imageFile = selectedAccountImageFile();
+  const imageError = selectedImageError(imageFile);
 
   if (!recipientUsername) {
     setAccountMessageStatus("Choose who should receive it.", "error");
@@ -545,7 +594,8 @@ accountMessageForm.addEventListener("submit", async (event) => {
     }
 
     accountMessage.value = "";
-    accountImage.value = "";
+    accountGalleryImage.value = "";
+    accountCameraImage.value = "";
     updateAccountCounter();
     updateAccountImageName();
     setAccountMessageStatus(result.message || "Sent.", "success");
@@ -556,6 +606,118 @@ accountMessageForm.addEventListener("submit", async (event) => {
     setAccountMessageStatus("Network error. Please try again.", "error");
   } finally {
     accountSendButton.disabled = false;
+  }
+});
+
+hideActiveToggle.addEventListener("change", async () => {
+  hideActiveToggle.disabled = true;
+  setInlineStatus(privacyStatus, "Saving...", "neutral");
+
+  try {
+    const response = await fetch("/api/settings/active-status", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        hideActiveStatus: hideActiveToggle.checked
+      })
+    });
+    const result = await response.json();
+
+    if (!response.ok) {
+      hideActiveToggle.checked = !hideActiveToggle.checked;
+      setInlineStatus(privacyStatus, result.error || "Could not save setting.", "error");
+      return;
+    }
+
+    currentUser = result.user;
+    updateAccountHeader();
+    setInlineStatus(privacyStatus, "Saved.", "success");
+    await loadRecipients({ silent: true });
+  } catch {
+    hideActiveToggle.checked = !hideActiveToggle.checked;
+    setInlineStatus(privacyStatus, "Network error. Please try again.", "error");
+  } finally {
+    hideActiveToggle.disabled = false;
+  }
+});
+
+accountProfileForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  const username = accountUsername.value.trim();
+
+  if (!/^[a-zA-Z0-9_.-]{3,32}$/.test(username)) {
+    setInlineStatus(profileStatus, "Use 3-32 letters, numbers, dot, dash, or underscore.", "error");
+    return;
+  }
+
+  saveProfileButton.disabled = true;
+  setInlineStatus(profileStatus, "Saving...", "neutral");
+
+  try {
+    const response = await fetch("/api/account/profile", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ username })
+    });
+    const result = await response.json();
+
+    if (!response.ok) {
+      setInlineStatus(profileStatus, result.error || "Could not update username.", "error");
+      return;
+    }
+
+    currentUser = result.user;
+    updateAccountHeader();
+    lastMessageSignature = "";
+    setInlineStatus(profileStatus, "Username saved.", "success");
+    await loadRecipients({ silent: true });
+    await loadMessages({ silent: true });
+  } catch {
+    setInlineStatus(profileStatus, "Network error. Please try again.", "error");
+  } finally {
+    saveProfileButton.disabled = false;
+  }
+});
+
+accountPasswordForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  const password = accountNewPassword.value;
+
+  if (password.length < 4 || password.length > 128) {
+    setInlineStatus(passwordStatus, "Password must be 4-128 characters.", "error");
+    return;
+  }
+
+  savePasswordButton.disabled = true;
+  setInlineStatus(passwordStatus, "Saving...", "neutral");
+
+  try {
+    const response = await fetch("/api/account/password", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ password })
+    });
+    const result = await response.json();
+
+    if (!response.ok) {
+      setInlineStatus(passwordStatus, result.error || "Could not update password.", "error");
+      return;
+    }
+
+    accountNewPassword.value = "";
+    setInlineStatus(passwordStatus, result.message || "Password updated.", "success");
+  } catch {
+    setInlineStatus(passwordStatus, "Network error. Please try again.", "error");
+  } finally {
+    savePasswordButton.disabled = false;
   }
 });
 
