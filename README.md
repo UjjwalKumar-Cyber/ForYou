@@ -44,6 +44,7 @@ foryou/
 - Render deployment stores messages in Postgres when `DATABASE_URL` is present
 - Account inbox dashboard at `/admin`
 - Username/password inbox login
+- Logged-in accounts can send messages to other inbox accounts
 - Auto-refreshing messages
 - Logout button
 - Long-lived signed-in sessions

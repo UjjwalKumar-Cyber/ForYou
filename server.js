@@ -177,6 +177,15 @@ function requireAccount(req, res, next) {
   return res.status(401).json({ error: "Please log in to your inbox." });
 }
 
+function requireMessageAccess(req, res, next) {
+  if (req.session.secretUnlocked === true || (req.session.accountUser && req.session.accountUser.username)) {
+    return next();
+  }
+
+  noStore(res);
+  return res.status(401).json({ error: "Please unlock the page or log in first." });
+}
+
 function cleanText(input) {
   if (typeof input !== "string") {
     return "";
@@ -268,12 +277,15 @@ app.post("/api/login", loginLimiter, async (req, res, next) => {
   }
 });
 
-app.post("/api/message", requireSecretAccess, messageLimiter, async (req, res, next) => {
+app.post("/api/message", requireMessageAccess, messageLimiter, async (req, res, next) => {
   try {
     noStore(res);
 
+    const accountUser = req.session.accountUser || null;
     const text = cleanMessage(req.body.message);
-    const senderName = cleanSenderName(req.body.senderName);
+    const senderName = accountUser
+      ? cleanSenderName(accountUser.displayName || accountUser.username)
+      : cleanSenderName(req.body.senderName);
     const recipientUsername = normalizeUsername(req.body.recipientUsername);
     const length = Array.from(text).length;
 
@@ -307,14 +319,14 @@ app.post("/api/message", requireSecretAccess, messageLimiter, async (req, res, n
 
     return res.status(201).json({
       ok: true,
-      message: "Your anonymous note was sent."
+      message: "Your message was sent."
     });
   } catch (error) {
     return next(error);
   }
 });
 
-app.get("/api/recipients", requireSecretAccess, async (req, res, next) => {
+app.get("/api/recipients", requireMessageAccess, async (req, res, next) => {
   try {
     noStore(res);
     const recipients = await listUsers();

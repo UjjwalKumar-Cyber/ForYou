@@ -159,6 +159,12 @@ h1 {
   letter-spacing: 0;
 }
 
+.compose-heading h2 {
+  margin: 0;
+  font-size: 1.24rem;
+  line-height: 1.15;
+}
+
 .admin-header h1 {
   font-size: 1.55rem;
 }
@@ -220,6 +226,10 @@ h1 {
   min-height: 190px;
   resize: vertical;
   padding: 16px;
+}
+
+.compact-textarea {
+  min-height: 130px;
 }
 
 .text-input:focus,
@@ -306,6 +316,18 @@ h1 {
   display: grid;
   gap: 14px;
   margin-top: 18px;
+}
+
+.compose-panel {
+  margin-top: 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(18, 13, 22, 0.58);
+  padding: 18px;
+}
+
+.compose-heading {
+  margin-bottom: 14px;
 }
 
 .message-card,

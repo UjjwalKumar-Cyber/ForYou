@@ -58,6 +58,40 @@
         </div>
 
         <p class="form-message" id="admin-status" role="status" aria-live="polite"></p>
+
+        <form class="compose-panel" id="account-message-form" novalidate>
+          <div class="compose-heading">
+            <div>
+              <p class="eyebrow">Send</p>
+              <h2>Write a message</h2>
+            </div>
+          </div>
+
+          <div class="stack">
+            <label class="field-label" for="account-recipient">Send to</label>
+            <select class="text-input select-input" id="account-recipient" name="recipientUsername" required>
+              <option value="">Loading inboxes...</option>
+            </select>
+
+            <label class="field-label" for="account-message">Message</label>
+            <textarea
+              class="textarea compact-textarea"
+              id="account-message"
+              name="message"
+              maxlength="500"
+              rows="5"
+              required
+            ></textarea>
+
+            <div class="form-row">
+              <p class="form-message" id="account-message-status" role="status" aria-live="polite"></p>
+              <p class="counter"><span id="account-character-count">0</span>/500</p>
+            </div>
+
+            <button class="button primary-button" type="submit">Send message</button>
+          </div>
+        </form>
+
         <div class="message-list" id="message-list"></div>
       </section>
     </main>
