@@ -46,12 +46,13 @@ function parseSeedUsers() {
   for (const item of accountUsers.split(",")) {
     const [rawUsername, ...passwordParts] = item.split(":");
     const username = normalizeUsername(rawUsername);
+    const displayName = String(rawUsername || "").trim();
     const password = passwordParts.join(":").trim();
 
     if (username && password) {
       users.push({
         username,
-        displayName: username,
+        displayName: displayName || username,
         password
       });
     }
