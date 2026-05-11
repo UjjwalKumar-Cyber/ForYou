@@ -7,14 +7,25 @@ const messageList = document.querySelector("#message-list");
 const refreshButton = document.querySelector("#refresh-button");
 const logoutButton = document.querySelector("#logout-button");
 const inboxUser = document.querySelector("#inbox-user");
+const activeStatus = document.querySelector("#active-status");
 const template = document.querySelector("#message-template");
 const accountMessageForm = document.querySelector("#account-message-form");
 const accountRecipient = document.querySelector("#account-recipient");
 const accountMessage = document.querySelector("#account-message");
+const accountImage = document.querySelector("#account-image");
+const clearAccountImage = document.querySelector("#clear-account-image");
+const accountImageName = document.querySelector("#account-image-name");
+const accountSendButton = document.querySelector("#account-send-button");
 const accountMessageStatus = document.querySelector("#account-message-status");
 const accountCharacterCount = document.querySelector("#account-character-count");
+const menuButton = document.querySelector("#account-menu-button");
+const closeMenuButton = document.querySelector("#account-menu-close");
+const accountDrawer = document.querySelector("#account-drawer");
+const drawerBackdrop = document.querySelector("#drawer-backdrop");
 
 const REFRESH_MS = 5000;
+const IMAGE_MAX_BYTES = 3 * 1024 * 1024;
+const SEEN_LIMIT = 500;
 let currentUser = null;
 let refreshTimer = null;
 let lastMessageSignature = "";
@@ -44,15 +55,42 @@ function updateAccountCounter() {
   accountCharacterCount.parentElement.dataset.warning = count > 450 ? "true" : "false";
 }
 
+function updateAccountHeader() {
+  if (!currentUser) {
+    inboxUser.textContent = "Signed in";
+    activeStatus.textContent = "";
+    return;
+  }
+
+  inboxUser.textContent = currentUser.displayName || currentUser.username;
+  activeStatus.textContent = currentUser.isActive ? "Active now" : "Recently active";
+}
+
 function showMessagesPanel() {
   loginPanel.classList.add("is-hidden");
   messagesPanel.classList.remove("is-hidden");
+  updateAccountHeader();
 }
 
 function showLoginPanel() {
   stopAutoRefresh();
+  closeDrawer();
   messagesPanel.classList.add("is-hidden");
   loginPanel.classList.remove("is-hidden");
+}
+
+function openDrawer() {
+  accountDrawer.classList.remove("is-hidden");
+  drawerBackdrop.classList.remove("is-hidden");
+  accountDrawer.setAttribute("aria-hidden", "false");
+  menuButton.setAttribute("aria-expanded", "true");
+}
+
+function closeDrawer() {
+  accountDrawer.classList.add("is-hidden");
+  drawerBackdrop.classList.add("is-hidden");
+  accountDrawer.setAttribute("aria-hidden", "true");
+  menuButton.setAttribute("aria-expanded", "false");
 }
 
 function formatDate(isoDate) {
@@ -69,13 +107,65 @@ function renderEmptyState() {
   messageList.replaceChildren(empty);
 }
 
-function renderMessages(messages) {
-  const signature = JSON.stringify(messages.map((message) => [
+function seenStorageKey() {
+  return `foryou_seen_messages_${currentUser ? currentUser.username : "guest"}`;
+}
+
+function readSeenMessageIds() {
+  const raw = window.localStorage.getItem(seenStorageKey());
+
+  if (!raw) {
+    return {
+      firstLoad: true,
+      seen: new Set()
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    return {
+      firstLoad: false,
+      seen: new Set(Array.isArray(parsed) ? parsed.map(String) : [])
+    };
+  } catch {
+    return {
+      firstLoad: true,
+      seen: new Set()
+    };
+  }
+}
+
+function saveSeenMessageIds(ids) {
+  window.localStorage.setItem(seenStorageKey(), JSON.stringify(Array.from(ids).slice(0, SEEN_LIMIT)));
+}
+
+function rememberRenderedMessages(messages, seen) {
+  const nextSeen = new Set(messages.map((message) => String(message.id)));
+
+  for (const id of seen) {
+    if (nextSeen.size >= SEEN_LIMIT) {
+      break;
+    }
+
+    nextSeen.add(id);
+  }
+
+  saveSeenMessageIds(nextSeen);
+}
+
+function messageSignature(messages) {
+  return JSON.stringify(messages.map((message) => [
     message.id,
     message.senderName,
     message.text,
-    message.createdAt
+    message.createdAt,
+    message.image ? message.image.name : "",
+    message.image ? message.image.size : 0
   ]));
+}
+
+function renderMessages(messages) {
+  const signature = messageSignature(messages);
 
   if (signature === lastMessageSignature) {
     return false;
@@ -85,9 +175,11 @@ function renderMessages(messages) {
 
   if (!messages.length) {
     renderEmptyState();
+    saveSeenMessageIds(new Set());
     return true;
   }
 
+  const { firstLoad, seen } = readSeenMessageIds();
   const fragment = document.createDocumentFragment();
 
   for (const message of messages) {
@@ -95,18 +187,39 @@ function renderMessages(messages) {
     const sender = node.querySelector(".message-sender");
     const time = node.querySelector(".message-time");
     const text = node.querySelector(".message-text");
+    const media = node.querySelector(".message-media");
+    const image = node.querySelector(".message-image");
+    const newBadge = node.querySelector(".new-badge");
     const deleteButton = node.querySelector(".delete-button");
+    const isNew = !firstLoad && !seen.has(String(message.id));
 
     sender.textContent = message.senderName || "Anonymous";
     time.dateTime = message.createdAt;
     time.textContent = formatDate(message.createdAt);
-    text.textContent = message.text;
-    deleteButton.dataset.id = message.id;
 
+    if (message.text) {
+      text.textContent = message.text;
+    } else {
+      text.classList.add("is-hidden");
+    }
+
+    if (message.image && message.image.data) {
+      image.src = message.image.data;
+      image.alt = message.image.name || "Attached message photo";
+      media.classList.remove("is-hidden");
+    }
+
+    if (isNew) {
+      node.classList.add("is-new");
+      newBadge.classList.remove("is-hidden");
+    }
+
+    deleteButton.dataset.id = message.id;
     fragment.append(node);
   }
 
   messageList.replaceChildren(fragment);
+  rememberRenderedMessages(messages, seen);
   return true;
 }
 
@@ -115,6 +228,7 @@ function startAutoRefresh() {
   refreshTimer = window.setInterval(() => {
     if (!document.hidden) {
       loadMessages({ silent: true });
+      loadRecipients({ silent: true });
     }
   }, REFRESH_MS);
 }
@@ -126,7 +240,14 @@ function stopAutoRefresh() {
   }
 }
 
+function recipientLabel(recipient) {
+  const name = recipient.displayName || recipient.username;
+  const activeText = recipient.isActive ? "● active" : "○ offline";
+  return `${name} ${activeText}`;
+}
+
 function setRecipients(recipients) {
+  const selectedRecipient = accountRecipient.value;
   const visibleRecipients = recipients.filter((recipient) => {
     if (currentUser && recipient.username === currentUser.username && recipients.length > 1) {
       return false;
@@ -144,7 +265,7 @@ function setRecipients(recipients) {
     option.value = "";
     option.textContent = "No other inboxes available";
     accountRecipient.replaceChildren(option);
-    accountMessageForm.querySelector("button").disabled = true;
+    accountSendButton.disabled = true;
     setAccountMessageStatus("No other inboxes are available yet.", "error");
     return;
   }
@@ -152,16 +273,23 @@ function setRecipients(recipients) {
   const options = visibleRecipients.map((recipient) => {
     const option = document.createElement("option");
     option.value = recipient.username;
-    option.textContent = recipient.displayName || recipient.username;
+    option.textContent = recipientLabel(recipient);
     return option;
   });
 
   accountRecipient.replaceChildren(...options);
-  accountMessageForm.querySelector("button").disabled = false;
+
+  if (visibleRecipients.some((recipient) => recipient.username === selectedRecipient)) {
+    accountRecipient.value = selectedRecipient;
+  }
+
+  accountSendButton.disabled = false;
   setAccountMessageStatus("", "neutral");
 }
 
-async function loadRecipients() {
+async function loadRecipients(options = {}) {
+  const { silent = false } = options;
+
   try {
     const response = await fetch("/api/recipients", {
       cache: "no-store"
@@ -175,13 +303,17 @@ async function loadRecipients() {
     const result = await response.json();
 
     if (!response.ok) {
-      setAccountMessageStatus(result.error || "Could not load inboxes.", "error");
+      if (!silent) {
+        setAccountMessageStatus(result.error || "Could not load inboxes.", "error");
+      }
       return;
     }
 
     setRecipients(result.recipients || []);
   } catch {
-    setAccountMessageStatus("Could not load inboxes.", "error");
+    if (!silent) {
+      setAccountMessageStatus("Could not load inboxes.", "error");
+    }
   }
 }
 
@@ -199,7 +331,6 @@ async function loadSession() {
       return false;
     }
 
-    inboxUser.textContent = `Signed in as ${currentUser.displayName || currentUser.username}`;
     showMessagesPanel();
     startAutoRefresh();
     await loadRecipients();
@@ -249,6 +380,45 @@ async function loadMessages(options = {}) {
   }
 }
 
+function selectedImageError(input) {
+  const file = input.files && input.files[0];
+
+  if (!file) {
+    return "";
+  }
+
+  if (file.type && !file.type.startsWith("image/")) {
+    return "Please choose a photo image file.";
+  }
+
+  if (file.size > IMAGE_MAX_BYTES) {
+    return "Please choose a photo under 3 MB.";
+  }
+
+  return "";
+}
+
+function updateAccountImageName() {
+  const file = accountImage.files && accountImage.files[0];
+
+  if (!file) {
+    accountImageName.textContent = "Optional photo or camera capture, up to 3 MB.";
+    return;
+  }
+
+  const error = selectedImageError(accountImage);
+
+  if (error) {
+    accountImage.value = "";
+    accountImageName.textContent = "Optional photo or camera capture, up to 3 MB.";
+    setAccountMessageStatus(error, "error");
+    return;
+  }
+
+  accountImageName.textContent = file.name;
+  setAccountMessageStatus("", "neutral");
+}
+
 loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
 
@@ -286,7 +456,6 @@ loginForm.addEventListener("submit", async (event) => {
     }
 
     currentUser = result.user;
-    inboxUser.textContent = `Signed in as ${currentUser.displayName || currentUser.username}`;
     setLoginMessage("Opened.", "success");
     showMessagesPanel();
     startAutoRefresh();
@@ -299,25 +468,45 @@ loginForm.addEventListener("submit", async (event) => {
   }
 });
 
-refreshButton.addEventListener("click", () => loadMessages());
+refreshButton.addEventListener("click", async () => {
+  await loadMessages();
+  await loadRecipients({ silent: true });
+});
+
+menuButton.addEventListener("click", openDrawer);
+closeMenuButton.addEventListener("click", closeDrawer);
+drawerBackdrop.addEventListener("click", closeDrawer);
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    closeDrawer();
+  }
+});
 
 accountMessage.addEventListener("input", updateAccountCounter);
+accountImage.addEventListener("change", updateAccountImageName);
+clearAccountImage.addEventListener("click", () => {
+  accountImage.value = "";
+  updateAccountImageName();
+});
 updateAccountCounter();
+updateAccountImageName();
 
 accountMessageForm.addEventListener("submit", async (event) => {
   event.preventDefault();
 
   const recipientUsername = accountRecipient.value;
   const message = accountMessage.value.trim();
-  const button = accountMessageForm.querySelector("button");
+  const imageError = selectedImageError(accountImage);
+  const imageFile = accountImage.files && accountImage.files[0];
 
   if (!recipientUsername) {
     setAccountMessageStatus("Choose who should receive it.", "error");
     return;
   }
 
-  if (!message) {
-    setAccountMessageStatus("Write a message first.", "error");
+  if (!message && !imageFile) {
+    setAccountMessageStatus("Write a message or attach a photo first.", "error");
     return;
   }
 
@@ -326,19 +515,26 @@ accountMessageForm.addEventListener("submit", async (event) => {
     return;
   }
 
-  button.disabled = true;
+  if (imageError) {
+    setAccountMessageStatus(imageError, "error");
+    return;
+  }
+
+  const payload = new FormData();
+  payload.append("recipientUsername", recipientUsername);
+  payload.append("message", message);
+
+  if (imageFile) {
+    payload.append("image", imageFile);
+  }
+
+  accountSendButton.disabled = true;
   setAccountMessageStatus("Sending...", "neutral");
 
   try {
     const response = await fetch("/api/message", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        recipientUsername,
-        message
-      })
+      body: payload
     });
 
     const result = await response.json();
@@ -349,14 +545,17 @@ accountMessageForm.addEventListener("submit", async (event) => {
     }
 
     accountMessage.value = "";
+    accountImage.value = "";
     updateAccountCounter();
+    updateAccountImageName();
     setAccountMessageStatus(result.message || "Sent.", "success");
     lastMessageSignature = "";
     await loadMessages({ silent: true });
+    await loadRecipients({ silent: true });
   } catch {
     setAccountMessageStatus("Network error. Please try again.", "error");
   } finally {
-    button.disabled = false;
+    accountSendButton.disabled = false;
   }
 });
 
@@ -411,6 +610,7 @@ messageList.addEventListener("click", async (event) => {
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden && currentUser) {
     loadMessages({ silent: true });
+    loadRecipients({ silent: true });
   }
 });
 

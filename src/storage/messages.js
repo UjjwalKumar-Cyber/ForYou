@@ -75,15 +75,34 @@ function parseSeedUsers() {
   return users.filter((user) => user.username && (user.password || user.passwordHash));
 }
 
+function normalizeImage(message) {
+  const image = message.image || {};
+  const data = image.data || message.imageData || message.image_data || null;
+
+  if (!data) {
+    return null;
+  }
+
+  const size = Number(image.size || message.imageSize || message.image_size || 0);
+
+  return {
+    data,
+    mime: image.mime || message.imageMime || message.image_mime || "image/jpeg",
+    name: image.name || message.imageName || message.image_name || "attached image",
+    size: Number.isFinite(size) ? size : 0
+  };
+}
+
 function normalizeMessage(message) {
   return {
     id: message.id,
-    text: message.text,
+    text: String(message.text || ""),
     senderName: message.senderName || message.sender_name || "Anonymous",
     recipientUsername: normalizeUsername(
       message.recipientUsername || message.recipient_username || "admin"
     ),
-    createdAt: message.createdAt || message.created_at || new Date().toISOString()
+    createdAt: message.createdAt || message.created_at || new Date().toISOString(),
+    image: normalizeImage(message)
   };
 }
 
@@ -127,6 +146,14 @@ async function setupPostgresStore() {
   await pool.query(`
     ALTER TABLE messages
     ADD COLUMN IF NOT EXISTS recipient_username TEXT NOT NULL DEFAULT 'admin'
+  `);
+
+  await pool.query(`
+    ALTER TABLE messages
+    ADD COLUMN IF NOT EXISTS image_data TEXT,
+    ADD COLUMN IF NOT EXISTS image_mime TEXT,
+    ADD COLUMN IF NOT EXISTS image_name TEXT,
+    ADD COLUMN IF NOT EXISTS image_size INTEGER
   `);
 
   await seedUsers();
@@ -317,6 +344,10 @@ async function listMessagesForUser(username) {
           text,
           sender_name AS "senderName",
           recipient_username AS "recipientUsername",
+          image_data AS "imageData",
+          image_mime AS "imageMime",
+          image_name AS "imageName",
+          image_size AS "imageSize",
           created_at AS "createdAt"
         FROM messages
         WHERE recipient_username = $1
@@ -335,23 +366,44 @@ async function listMessagesForUser(username) {
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 }
 
-async function addMessage({ text, senderName, recipientUsername }) {
+async function addMessage({ text, senderName, recipientUsername, image = null }) {
   const message = {
     id: crypto.randomUUID(),
-    text,
+    text: String(text || ""),
     senderName,
     recipientUsername: normalizeUsername(recipientUsername),
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    image
   };
 
   if (usePostgres) {
     await initStore();
     await pool.query(
       `
-        INSERT INTO messages (id, text, sender_name, recipient_username, created_at)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO messages (
+          id,
+          text,
+          sender_name,
+          recipient_username,
+          image_data,
+          image_mime,
+          image_name,
+          image_size,
+          created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       `,
-      [message.id, message.text, message.senderName, message.recipientUsername, message.createdAt]
+      [
+        message.id,
+        message.text,
+        message.senderName,
+        message.recipientUsername,
+        message.image ? message.image.data : null,
+        message.image ? message.image.mime : null,
+        message.image ? message.image.name : null,
+        message.image ? message.image.size : null,
+        message.createdAt
+      ]
     );
 
     return message;

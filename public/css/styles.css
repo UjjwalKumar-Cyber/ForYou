@@ -12,6 +12,7 @@
   --rose-strong: #ff4f8d;
   --wine: #7e294f;
   --gold: #f4c777;
+  --green: #60f0a8;
   --error: #ff9a9a;
   --success: #9be7c0;
   --shadow: 0 24px 70px rgba(0, 0, 0, 0.38);
@@ -136,11 +137,131 @@ textarea {
   gap: 14px;
 }
 
+.message-card-header {
+  flex-wrap: wrap;
+}
+
+.message-card-header > div {
+  min-width: 0;
+}
+
 .admin-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
   justify-content: flex-end;
+}
+
+.menu-button {
+  display: inline-grid;
+  width: 48px;
+  height: 48px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+  padding: 12px;
+}
+
+.menu-button span {
+  display: block;
+  width: 20px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--text);
+}
+
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: rgba(4, 2, 6, 0.62);
+  backdrop-filter: blur(4px);
+}
+
+.account-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 31;
+  display: grid;
+  align-content: start;
+  width: min(86vw, 340px);
+  min-height: 100vh;
+  border-left: 1px solid var(--line);
+  background:
+    linear-gradient(180deg, rgba(255, 111, 159, 0.12), transparent 32%),
+    rgba(21, 14, 24, 0.98);
+  box-shadow: -22px 0 50px rgba(0, 0, 0, 0.42);
+  padding: 24px;
+}
+
+.drawer-topline,
+.drawer-user-row {
+  display: flex;
+  align-items: center;
+}
+
+.drawer-topline {
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.drawer-user-row {
+  gap: 10px;
+}
+
+.drawer-user-row h2 {
+  margin: 0;
+  font-size: 1.25rem;
+  line-height: 1.1;
+}
+
+.drawer-presence {
+  margin-top: 10px;
+}
+
+.drawer-actions {
+  display: grid;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.close-button {
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 750;
+  padding: 0 12px;
+}
+
+.presence-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.94rem;
+}
+
+.presence-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--dim);
+  box-shadow: 0 0 0 4px rgba(158, 140, 150, 0.12);
+}
+
+.presence-dot.is-active {
+  background: var(--green);
+  box-shadow: 0 0 0 4px rgba(96, 240, 168, 0.14), 0 0 18px rgba(96, 240, 168, 0.45);
 }
 
 .eyebrow {
@@ -238,6 +359,52 @@ h1 {
   border-color: rgba(255, 111, 159, 0.82);
   background: rgba(14, 11, 16, 0.92);
   box-shadow: 0 0 0 4px rgba(255, 111, 159, 0.14);
+}
+
+.file-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.file-input {
+  width: 100%;
+  min-height: 52px;
+  border: 1px solid rgba(255, 230, 238, 0.18);
+  border-radius: 16px;
+  background: rgba(12, 10, 14, 0.74);
+  color: var(--muted);
+  padding: 10px;
+}
+
+.file-input::file-selector-button {
+  min-height: 34px;
+  margin-right: 10px;
+  border: 0;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 750;
+  padding: 0 12px;
+}
+
+.clear-file-button {
+  min-width: 76px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 750;
+  padding: 0 14px;
+}
+
+.file-hint {
+  margin: -2px 0 0;
+  color: var(--dim);
+  font-size: 0.88rem;
 }
 
 .button {
@@ -339,6 +506,12 @@ h1 {
 
 .message-card {
   padding: 18px;
+  transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+
+.message-card.is-new {
+  border-color: rgba(96, 240, 168, 0.62);
+  box-shadow: 0 0 0 1px rgba(96, 240, 168, 0.18), 0 18px 42px rgba(96, 240, 168, 0.1);
 }
 
 .message-time {
@@ -358,6 +531,33 @@ h1 {
   color: var(--text);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.new-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  border: 1px solid rgba(96, 240, 168, 0.34);
+  border-radius: 999px;
+  background: rgba(96, 240, 168, 0.12);
+  color: var(--green);
+  font-size: 0.78rem;
+  font-weight: 850;
+  padding: 0 10px;
+}
+
+.message-media {
+  margin-top: 14px;
+}
+
+.message-image {
+  display: block;
+  width: 100%;
+  max-height: 430px;
+  border: 1px solid rgba(255, 230, 238, 0.14);
+  border-radius: 16px;
+  object-fit: contain;
+  background: rgba(10, 8, 12, 0.72);
 }
 
 .empty-state {
@@ -389,10 +589,13 @@ h1 {
 }
 
 @media (max-width: 520px) {
-  .admin-header,
   .form-row {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .admin-header {
+    align-items: center;
   }
 
   .secondary-button,
@@ -410,5 +613,13 @@ h1 {
 
   .message-card-header {
     align-items: flex-start;
+  }
+
+  .file-control {
+    grid-template-columns: 1fr;
+  }
+
+  .clear-file-button {
+    min-height: 46px;
   }
 }

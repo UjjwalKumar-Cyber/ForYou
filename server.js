@@ -6,6 +6,7 @@ const express = require("express");
 const rateLimit = require("express-rate-limit");
 const session = require("express-session");
 const helmet = require("helmet");
+const multer = require("multer");
 const sanitizeHtml = require("sanitize-html");
 
 const {
@@ -24,6 +25,42 @@ const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const SECRET_PATH = "/secret-8392-love-note";
 const isProduction = process.env.NODE_ENV === "production";
+const ACTIVE_WINDOW_MS = 1000 * 60 * 2;
+const IMAGE_MAX_BYTES = 3 * 1024 * 1024;
+const allowedImageTypes = new Set([
+  "image/gif",
+  "image/heic",
+  "image/heif",
+  "image/jpeg",
+  "image/png",
+  "image/webp"
+]);
+const imageMimeByExtension = new Map([
+  [".gif", "image/gif"],
+  [".heic", "image/heic"],
+  [".heif", "image/heif"],
+  [".jpeg", "image/jpeg"],
+  [".jpg", "image/jpeg"],
+  [".png", "image/png"],
+  [".webp", "image/webp"]
+]);
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: IMAGE_MAX_BYTES,
+    files: 1
+  },
+  fileFilter: (req, file, callback) => {
+    const imageMime = getImageMime(file);
+
+    if (!imageMime) {
+      return callback(new Error("Please attach a photo image file only."));
+    }
+
+    return callback(null, true);
+  }
+});
 
 function requiredSecret(name, fallback) {
   const value = process.env[name];
@@ -51,6 +88,8 @@ const SESSION_SECRET = requiredSecret(
 );
 
 process.env.ADMIN_PASSWORD = ADMIN_PASSWORD;
+
+const activeUsers = new Map();
 
 const cspDirectives = {
   defaultSrc: ["'self'"],
@@ -108,6 +147,11 @@ app.use(
   })
 );
 
+app.use((req, res, next) => {
+  markUserActive(req.session.accountUser);
+  next();
+});
+
 const sessionKey = (req) => req.sessionID || "anonymous-session";
 
 const loginLimiter = rateLimit({
@@ -123,12 +167,12 @@ const loginLimiter = rateLimit({
 
 const messageLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  limit: 60,
+  limit: 180,
   standardHeaders: "draft-8",
   legacyHeaders: false,
   keyGenerator: sessionKey,
   message: {
-    error: "Too many notes were sent from this browser. Please wait a few minutes."
+    error: "Too many notes were sent from this browser. Please wait a little before trying again."
   }
 });
 
@@ -212,10 +256,96 @@ function cleanSenderName(input) {
   return cleanText(input);
 }
 
-function publicAccount(user) {
+function pruneActiveUsers(now = Date.now()) {
+  for (const [username, record] of activeUsers.entries()) {
+    if (!record || now - record.lastActiveAt > ACTIVE_WINDOW_MS) {
+      activeUsers.delete(username);
+    }
+  }
+}
+
+function isUserActive(username) {
+  const now = Date.now();
+  const normalizedUsername = normalizeUsername(username);
+  pruneActiveUsers(now);
+
+  if (!normalizedUsername) {
+    return false;
+  }
+
+  const record = activeUsers.get(normalizedUsername);
+  return Boolean(record && now - record.lastActiveAt <= ACTIVE_WINDOW_MS);
+}
+
+function markUserActive(user) {
+  const username = normalizeUsername(user && user.username);
+
+  if (!username) {
+    return;
+  }
+
+  activeUsers.set(username, {
+    lastActiveAt: Date.now()
+  });
+}
+
+function cleanFileName(input) {
+  const cleaned = cleanText(input)
+    .replace(/[^a-zA-Z0-9 ._()-]/g, "")
+    .trim();
+
+  return cleaned.slice(0, 80) || "photo";
+}
+
+function getImageMime(file) {
+  if (allowedImageTypes.has(file.mimetype)) {
+    return file.mimetype;
+  }
+
+  const extension = path.extname(file.originalname || "").toLowerCase();
+  return imageMimeByExtension.get(extension) || "";
+}
+
+function buildImagePayload(file) {
+  if (!file) {
+    return null;
+  }
+
+  const mime = getImageMime(file) || "image/jpeg";
+
   return {
-    username: user.username,
-    displayName: user.displayName || user.username
+    data: `data:${mime};base64,${file.buffer.toString("base64")}`,
+    mime,
+    name: cleanFileName(file.originalname),
+    size: file.size
+  };
+}
+
+function handleImageUpload(req, res, next) {
+  upload.single("image")(req, res, (error) => {
+    if (!error) {
+      return next();
+    }
+
+    noStore(res);
+
+    if (error instanceof multer.MulterError && error.code === "LIMIT_FILE_SIZE") {
+      return res.status(400).json({ error: "Please keep the photo under 3 MB." });
+    }
+
+    return res.status(400).json({
+      error: error.message || "The photo could not be uploaded."
+    });
+  });
+}
+
+function publicAccount(user) {
+  const username = normalizeUsername(user.username);
+
+  return {
+    username,
+    displayName: user.displayName || user.username,
+    isActive: isUserActive(username)
   };
 }
 
@@ -254,7 +384,10 @@ app.post("/api/login", loginLimiter, async (req, res, next) => {
         return res.status(401).json({ error: "Username or password is wrong." });
       }
 
-      req.session.accountUser = publicAccount(user);
+      const account = publicAccount(user);
+      markUserActive(account);
+      account.isActive = true;
+      req.session.accountUser = account;
       return res.json({
         ok: true,
         user: req.session.accountUser,
@@ -277,12 +410,13 @@ app.post("/api/login", loginLimiter, async (req, res, next) => {
   }
 });
 
-app.post("/api/message", requireMessageAccess, messageLimiter, async (req, res, next) => {
+app.post("/api/message", requireMessageAccess, messageLimiter, handleImageUpload, async (req, res, next) => {
   try {
     noStore(res);
 
     const accountUser = req.session.accountUser || null;
     const text = cleanMessage(req.body.message);
+    const image = buildImagePayload(req.file);
     const senderName = accountUser
       ? cleanSenderName(accountUser.displayName || accountUser.username)
       : cleanSenderName(req.body.senderName);
@@ -297,8 +431,8 @@ app.post("/api/message", requireMessageAccess, messageLimiter, async (req, res, 
       return res.status(400).json({ error: "Please keep the sender name short." });
     }
 
-    if (!text) {
-      return res.status(400).json({ error: "Please write a note before sending." });
+    if (!text && !image) {
+      return res.status(400).json({ error: "Write a message or add a photo before sending." });
     }
 
     if (length > 500) {
@@ -314,7 +448,8 @@ app.post("/api/message", requireMessageAccess, messageLimiter, async (req, res, 
     await addMessage({
       text,
       senderName,
-      recipientUsername: recipient.username
+      recipientUsername: recipient.username,
+      image
     });
 
     return res.status(201).json({
@@ -329,7 +464,7 @@ app.post("/api/message", requireMessageAccess, messageLimiter, async (req, res, 
 app.get("/api/recipients", requireMessageAccess, async (req, res, next) => {
   try {
     noStore(res);
-    const recipients = await listUsers();
+    const recipients = (await listUsers()).map(publicAccount);
     return res.json({ recipients });
   } catch (error) {
     return next(error);
@@ -339,11 +474,17 @@ app.get("/api/recipients", requireMessageAccess, async (req, res, next) => {
 app.get("/api/session", (req, res) => {
   noStore(res);
   return res.json({
-    user: req.session.accountUser || null
+    user: req.session.accountUser ? publicAccount(req.session.accountUser) : null
   });
 });
 
 app.post("/api/logout", (req, res, next) => {
+  const username = normalizeUsername(req.session.accountUser && req.session.accountUser.username);
+
+  if (username) {
+    activeUsers.delete(username);
+  }
+
   req.session.destroy((error) => {
     if (error) {
       return next(error);

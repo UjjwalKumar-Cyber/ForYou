@@ -1,6 +1,6 @@
 # ForyoU
 
-ForyoU is a complete Node.js and Express private messaging site. The secret page is password-protected, accepts messages up to 500 characters with a sender name, stores them with timestamps, and lets each inbox account log in with its own username and password to read only the messages sent to that account.
+ForyoU is a complete Node.js and Express private messaging site. The secret page is password-protected, accepts messages up to 500 characters with a sender name and optional photo, stores them with timestamps, and lets each inbox account log in with its own username and password to read only the messages sent to that account.
 
 Locally, messages are saved in `data/messages.json`. On Render, the included Blueprint uses Render Postgres through `DATABASE_URL` so the app can run on Render's free web service plan.
 
@@ -39,13 +39,17 @@ foryou/
 
 - Secret private route: `/secret-8392-love-note`
 - Password screen before the message page
-- Message form with sender name, recipient inbox, and a 500 character limit
+- Message form with sender name, recipient inbox, optional photo upload, and a 500 character limit
+- Camera/photo input on mobile devices
 - Timestamped message storage in `data/messages.json`
 - Render deployment stores messages in Postgres when `DATABASE_URL` is present
 - Account inbox dashboard at `/admin`
 - Username/password inbox login
 - Logged-in accounts can send messages to other inbox accounts
 - Auto-refreshing messages
+- Active status indicators for signed-in users
+- New incoming messages are highlighted in each account
+- Clean side menu for username, active status, refresh, and logout
 - Logout button
 - Long-lived signed-in sessions
 - Delete button for each message
@@ -53,7 +57,8 @@ foryou/
 - `express-rate-limit` on login and message submission
 - Server-side sanitization with `sanitize-html`
 - Client-side rendering with `textContent` to avoid XSS
-- No sender name, email, login details, or IP address saved with messages
+- Sender display names are saved with messages so recipients can see who sent them
+- No sender email, IP address, or login attempt details are saved with messages
 - `noindex, nofollow` meta tags and `robots.txt` crawler block
 - Mobile-first dark romantic UI
 
@@ -150,7 +155,7 @@ or:
 }
 ```
 
-`POST /api/message` accepts:
+`POST /api/message` accepts JSON for text-only messages:
 
 ```json
 {
@@ -159,6 +164,17 @@ or:
   "message": "Your anonymous note"
 }
 ```
+
+For messages with photos, send `multipart/form-data` with:
+
+```text
+senderName=Sender name
+recipientUsername=admin
+message=Your anonymous note
+image=@photo.png
+```
+
+The photo field is optional, but each message must include text, a photo, or both. Photos are limited to 3 MB.
 
 ## Render Deployment
 
@@ -219,8 +235,14 @@ Local JSON messages are stored as:
   "text": "sanitized message text",
   "senderName": "Sender name",
   "recipientUsername": "admin",
-  "createdAt": "2026-05-06T00:00:00.000Z"
+  "createdAt": "2026-05-06T00:00:00.000Z",
+  "image": {
+    "data": "data:image/png;base64,...",
+    "mime": "image/png",
+    "name": "photo.png",
+    "size": 12345
+  }
 }
 ```
 
-The app does not persist sender names, emails, IP addresses, or login attempts. Rate limiting uses the current browser session as its key and keeps counters only in memory.
+The app stores the sender display name because inbox users asked to see who sent a message. It does not persist sender emails, IP addresses, or login attempts. Rate limiting uses the current browser session as its key and keeps counters only in memory.

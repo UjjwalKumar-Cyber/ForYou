@@ -2,9 +2,14 @@ const form = document.querySelector("#message-form");
 const senderNameInput = document.querySelector("#sender-name");
 const recipientSelect = document.querySelector("#recipient");
 const textarea = document.querySelector("#message");
+const imageInput = document.querySelector("#message-image");
+const clearImageButton = document.querySelector("#clear-message-image");
+const imageName = document.querySelector("#message-image-name");
 const counter = document.querySelector("#character-count");
 const statusMessage = document.querySelector("#message-status");
-const button = form.querySelector("button");
+const button = form.querySelector("button[type='submit']");
+
+const IMAGE_MAX_BYTES = 3 * 1024 * 1024;
 
 function countCharacters(value) {
   return Array.from(value).length;
@@ -21,6 +26,12 @@ function updateCounter() {
   counter.parentElement.dataset.warning = count > 450 ? "true" : "false";
 }
 
+function recipientLabel(recipient) {
+  const name = recipient.displayName || recipient.username;
+  const activeText = recipient.isActive ? "● active" : "○ offline";
+  return `${name} ${activeText}`;
+}
+
 function setRecipients(recipients) {
   if (!recipients.length) {
     const option = document.createElement("option");
@@ -35,7 +46,7 @@ function setRecipients(recipients) {
   const options = recipients.map((recipient) => {
     const option = document.createElement("option");
     option.value = recipient.username;
-    option.textContent = recipient.displayName || recipient.username;
+    option.textContent = recipientLabel(recipient);
     return option;
   });
 
@@ -61,8 +72,53 @@ async function loadRecipients() {
   }
 }
 
+function selectedImageError() {
+  const file = imageInput.files && imageInput.files[0];
+
+  if (!file) {
+    return "";
+  }
+
+  if (file.type && !file.type.startsWith("image/")) {
+    return "Please choose a photo image file.";
+  }
+
+  if (file.size > IMAGE_MAX_BYTES) {
+    return "Please choose a photo under 3 MB.";
+  }
+
+  return "";
+}
+
+function updateImageName() {
+  const file = imageInput.files && imageInput.files[0];
+
+  if (!file) {
+    imageName.textContent = "Optional photo or camera capture, up to 3 MB.";
+    return;
+  }
+
+  const error = selectedImageError();
+
+  if (error) {
+    imageInput.value = "";
+    imageName.textContent = "Optional photo or camera capture, up to 3 MB.";
+    setStatus(error, "error");
+    return;
+  }
+
+  imageName.textContent = file.name;
+  setStatus("", "neutral");
+}
+
 textarea.addEventListener("input", updateCounter);
+imageInput.addEventListener("change", updateImageName);
+clearImageButton.addEventListener("click", () => {
+  imageInput.value = "";
+  updateImageName();
+});
 updateCounter();
+updateImageName();
 loadRecipients();
 
 form.addEventListener("submit", async (event) => {
@@ -71,6 +127,8 @@ form.addEventListener("submit", async (event) => {
   const senderName = senderNameInput.value.trim();
   const recipientUsername = recipientSelect.value;
   const message = textarea.value.trim();
+  const imageFile = imageInput.files && imageInput.files[0];
+  const imageError = selectedImageError();
 
   if (!senderName) {
     setStatus("Add your name first.", "error");
@@ -87,8 +145,8 @@ form.addEventListener("submit", async (event) => {
     return;
   }
 
-  if (!message) {
-    setStatus("Write a note first.", "error");
+  if (!message && !imageFile) {
+    setStatus("Write a note or attach a photo first.", "error");
     return;
   }
 
@@ -97,20 +155,27 @@ form.addEventListener("submit", async (event) => {
     return;
   }
 
+  if (imageError) {
+    setStatus(imageError, "error");
+    return;
+  }
+
+  const payload = new FormData();
+  payload.append("senderName", senderName);
+  payload.append("recipientUsername", recipientUsername);
+  payload.append("message", message);
+
+  if (imageFile) {
+    payload.append("image", imageFile);
+  }
+
   button.disabled = true;
   setStatus("Sending...", "neutral");
 
   try {
     const response = await fetch("/api/message", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        senderName,
-        recipientUsername,
-        message
-      })
+      body: payload
     });
 
     const result = await response.json();
@@ -121,7 +186,9 @@ form.addEventListener("submit", async (event) => {
     }
 
     textarea.value = "";
+    imageInput.value = "";
     updateCounter();
+    updateImageName();
     setStatus(result.message || "Sent.", "success");
   } catch {
     setStatus("Network error. Please try again.", "error");

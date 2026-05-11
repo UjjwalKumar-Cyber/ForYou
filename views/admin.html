@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="robots" content="noindex, nofollow">
     <title>ForyoU Admin</title>
-    <link rel="stylesheet" href="/css/styles.css?v=20260511-2">
+    <link rel="stylesheet" href="/css/styles.css?v=20260512-1">
   </head>
   <body>
     <main class="page-shell admin-shell">
@@ -49,13 +49,39 @@
           <div>
             <p class="eyebrow">ForyoU Admin</p>
             <h1 id="messages-title">Your messages</h1>
-            <p class="inbox-user" id="inbox-user"></p>
+            <p class="presence-line"><span class="presence-dot is-active" aria-hidden="true"></span>Live inbox</p>
           </div>
-          <div class="admin-actions">
+          <button
+            class="menu-button"
+            id="account-menu-button"
+            type="button"
+            aria-label="Open account menu"
+            aria-expanded="false"
+          >
+            <span></span>
+            <span></span>
+            <span></span>
+          </button>
+        </div>
+
+        <div class="drawer-backdrop is-hidden" id="drawer-backdrop"></div>
+        <aside class="account-drawer is-hidden" id="account-drawer" aria-hidden="true">
+          <div class="drawer-topline">
+            <div>
+              <p class="eyebrow">Account</p>
+              <div class="drawer-user-row">
+                <span class="presence-dot is-active" aria-hidden="true"></span>
+                <h2 id="inbox-user">Signed in</h2>
+              </div>
+            </div>
+            <button class="close-button" id="account-menu-close" type="button" aria-label="Close account menu">Close</button>
+          </div>
+          <p class="presence-line drawer-presence"><span id="active-status">Active now</span></p>
+          <div class="drawer-actions">
             <button class="button secondary-button" id="refresh-button" type="button">Refresh</button>
             <button class="button secondary-button" id="logout-button" type="button">Logout</button>
           </div>
-        </div>
+        </aside>
 
         <p class="form-message" id="admin-status" role="status" aria-live="polite"></p>
 
@@ -80,15 +106,28 @@
               name="message"
               maxlength="500"
               rows="5"
-              required
             ></textarea>
+
+            <label class="field-label" for="account-image">Photo</label>
+            <div class="file-control">
+              <input
+                class="file-input"
+                id="account-image"
+                name="image"
+                type="file"
+                accept="image/*"
+                capture="environment"
+              >
+              <button class="clear-file-button" id="clear-account-image" type="button">Clear</button>
+            </div>
+            <p class="file-hint" id="account-image-name">Optional photo or camera capture, up to 3 MB.</p>
 
             <div class="form-row">
               <p class="form-message" id="account-message-status" role="status" aria-live="polite"></p>
               <p class="counter"><span id="account-character-count">0</span>/500</p>
             </div>
 
-            <button class="button primary-button" type="submit">Send message</button>
+            <button class="button primary-button" id="account-send-button" type="submit">Send message</button>
           </div>
         </form>
 
@@ -103,12 +142,16 @@
             <p class="message-sender"></p>
             <time class="message-time"></time>
           </div>
+          <span class="new-badge is-hidden">New</span>
           <button class="delete-button" type="button">Delete</button>
         </div>
         <p class="message-text"></p>
+        <div class="message-media is-hidden">
+          <img class="message-image" alt="Attached message photo">
+        </div>
       </article>
     </template>
 
-    <script src="/js/admin.js?v=20260511-2" defer></script>
+    <script src="/js/admin.js?v=20260512-1" defer></script>
   </body>
 </html>
