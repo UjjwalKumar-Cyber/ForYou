@@ -12,13 +12,23 @@
       <section class="card admin-login-card" id="admin-login-panel" aria-labelledby="admin-login-title">
         <img class="seal" src="/assets/seal.svg" alt="" width="76" height="76">
         <p class="eyebrow">ForyoU Admin</p>
-        <h1 id="admin-login-title">Private archive</h1>
-        <p class="soft-copy">The letters stay locked until you open them.</p>
+        <h1 id="admin-login-title">Private inbox</h1>
+        <p class="soft-copy">Log in with the username and password made for your account.</p>
 
         <form class="stack" id="admin-login-form" novalidate>
-          <input type="hidden" name="scope" value="admin">
+          <input type="hidden" name="scope" value="account">
 
-          <label class="field-label" for="admin-password">Admin password</label>
+          <label class="field-label" for="admin-username">Username</label>
+          <input
+            class="text-input"
+            id="admin-username"
+            name="username"
+            type="text"
+            autocomplete="username"
+            required
+          >
+
+          <label class="field-label" for="admin-password">Password</label>
           <input
             class="text-input"
             id="admin-password"
@@ -30,7 +40,7 @@
 
           <p class="form-message" id="admin-login-message" role="status" aria-live="polite"></p>
 
-          <button class="button primary-button" type="submit">Open archive</button>
+          <button class="button primary-button" type="submit">Open inbox</button>
         </form>
       </section>
 
@@ -38,9 +48,13 @@
         <div class="admin-header">
           <div>
             <p class="eyebrow">ForyoU Admin</p>
-            <h1 id="messages-title">Anonymous messages</h1>
+            <h1 id="messages-title">Your messages</h1>
+            <p class="inbox-user" id="inbox-user"></p>
           </div>
-          <button class="button secondary-button" id="refresh-button" type="button">Refresh</button>
+          <div class="admin-actions">
+            <button class="button secondary-button" id="refresh-button" type="button">Refresh</button>
+            <button class="button secondary-button" id="logout-button" type="button">Logout</button>
+          </div>
         </div>
 
         <p class="form-message" id="admin-status" role="status" aria-live="polite"></p>
@@ -51,7 +65,10 @@
     <template id="message-template">
       <article class="message-card">
         <div class="message-card-header">
-          <time class="message-time"></time>
+          <div>
+            <p class="message-sender"></p>
+            <time class="message-time"></time>
+          </div>
           <button class="delete-button" type="button">Delete</button>
         </div>
         <p class="message-text"></p>

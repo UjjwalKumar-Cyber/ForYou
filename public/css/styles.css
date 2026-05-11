@@ -51,6 +51,7 @@ body::before {
 
 button,
 input,
+select,
 textarea {
   font: inherit;
 }
@@ -135,6 +136,13 @@ textarea {
   gap: 14px;
 }
 
+.admin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
 .eyebrow {
   margin: 0 0 8px;
   color: var(--gold);
@@ -160,6 +168,12 @@ h1 {
   color: var(--muted);
 }
 
+.inbox-user {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.94rem;
+}
+
 .stack {
   display: grid;
   gap: 12px;
@@ -173,6 +187,7 @@ h1 {
 }
 
 .text-input,
+.select-input,
 .textarea {
   width: 100%;
   border: 1px solid rgba(255, 230, 238, 0.18);
@@ -188,6 +203,19 @@ h1 {
   padding: 0 16px;
 }
 
+.select-input {
+  appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--gold) 50%),
+    linear-gradient(135deg, var(--gold) 50%, transparent 50%);
+  background-position:
+    calc(100% - 20px) 22px,
+    calc(100% - 14px) 22px;
+  background-repeat: no-repeat;
+  background-size: 6px 6px;
+  padding-right: 44px;
+}
+
 .textarea {
   min-height: 190px;
   resize: vertical;
@@ -195,6 +223,7 @@ h1 {
 }
 
 .text-input:focus,
+.select-input:focus,
 .textarea:focus {
   border-color: rgba(255, 111, 159, 0.82);
   background: rgba(14, 11, 16, 0.92);
@@ -296,6 +325,12 @@ h1 {
   font-weight: 700;
 }
 
+.message-sender {
+  margin: 0 0 4px;
+  color: var(--text);
+  font-weight: 800;
+}
+
 .message-text {
   margin: 16px 0 0;
   color: var(--text);
@@ -340,6 +375,10 @@ h1 {
 
   .secondary-button,
   .counter {
+    width: 100%;
+  }
+
+  .admin-actions {
     width: 100%;
   }
 

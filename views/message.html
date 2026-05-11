@@ -19,6 +19,22 @@
         <p class="soft-copy">Say it softly, and let it arrive.</p>
 
         <form class="stack" id="message-form" novalidate>
+          <label class="field-label" for="sender-name">Your name</label>
+          <input
+            class="text-input"
+            id="sender-name"
+            name="senderName"
+            type="text"
+            maxlength="60"
+            autocomplete="name"
+            required
+          >
+
+          <label class="field-label" for="recipient">Send to</label>
+          <select class="text-input select-input" id="recipient" name="recipientUsername" required>
+            <option value="">Loading inboxes...</option>
+          </select>
+
           <label class="field-label" for="message">Message</label>
           <textarea
             class="textarea"
@@ -34,7 +50,7 @@
             <p class="counter"><span id="character-count">0</span>/500</p>
           </div>
 
-          <button class="button primary-button" type="submit">Send anonymously</button>
+          <button class="button primary-button" type="submit">Send message</button>
         </form>
       </section>
     </main>

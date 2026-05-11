@@ -16,8 +16,12 @@ services:
         generateValue: true
       - key: MESSAGE_PAGE_PASSWORD
         sync: false
+      - key: ADMIN_USERNAME
+        value: admin
       - key: ADMIN_PASSWORD
         sync: false
+      - key: ACCOUNT_USERS
+        value: ""
 
 databases:
   - name: foryou-db
