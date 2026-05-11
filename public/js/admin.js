@@ -128,7 +128,15 @@ function stopAutoRefresh() {
 
 function setRecipients(recipients) {
   const visibleRecipients = recipients.filter((recipient) => {
-    return !currentUser || recipient.username !== currentUser.username || recipients.length === 1;
+    if (currentUser && recipient.username === currentUser.username && recipients.length > 1) {
+      return false;
+    }
+
+    if (currentUser && currentUser.username !== "admin" && recipient.username === "admin") {
+      return false;
+    }
+
+    return true;
   });
 
   if (!visibleRecipients.length) {
