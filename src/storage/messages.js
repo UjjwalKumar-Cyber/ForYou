@@ -7,6 +7,20 @@ const { hashPassword, verifyPassword } = require("../security/passwords");
 const dataDir = path.resolve(process.cwd(), process.env.DATA_DIR || "data");
 const messagesFile = path.join(dataDir, "messages.json");
 const usePostgres = Boolean(process.env.DATABASE_URL);
+const builtInUsers = [
+  {
+    username: "kabir",
+    displayName: "Kabir",
+    passwordHash:
+      "scrypt$16384$8$1$8ed6965f9107cd4770020fbf81f8f564$1b25e1724e62e0a60fdf902d5b68b5dcccc3b87fcfedc994f9f06b6bff7e4a90d89547e37b43c47e6ce95cac35c5c5d124b51d88d3f61231d0eef8059450dad6"
+  },
+  {
+    username: "kaish",
+    displayName: "Kaish",
+    passwordHash:
+      "scrypt$16384$8$1$fd06d823fa97f8ca2e2d55dcc79c662c$2df4ac42f565eba4b4ea46892a31ff6c148b56af4080236e90d19e4bc14568bf12ce3556a488f1159741376d0b9b73c388eca129fc9dd3b7d1362b9642703f7b"
+  }
+];
 
 let writeQueue = Promise.resolve();
 let pool;
@@ -30,7 +44,7 @@ function normalizeUsername(username) {
 }
 
 function parseSeedUsers() {
-  const users = [];
+  const users = [...builtInUsers];
   const adminPassword = process.env.ADMIN_PASSWORD;
 
   if (adminPassword) {
@@ -58,7 +72,7 @@ function parseSeedUsers() {
     }
   }
 
-  return users.filter((user) => user.username && user.password);
+  return users.filter((user) => user.username && (user.password || user.passwordHash));
 }
 
 function normalizeMessage(message) {
@@ -189,7 +203,7 @@ async function seedUsers() {
           ON CONFLICT (username)
           DO UPDATE SET display_name = EXCLUDED.display_name, password_hash = EXCLUDED.password_hash
         `,
-        [user.username, user.displayName, hashPassword(user.password)]
+        [user.username, user.displayName, user.passwordHash || hashPassword(user.password)]
       );
     }
     return;
@@ -203,7 +217,7 @@ async function seedUsers() {
       const nextUser = {
         username: user.username,
         displayName: user.displayName,
-        passwordHash: hashPassword(user.password),
+        passwordHash: user.passwordHash || hashPassword(user.password),
         createdAt: new Date().toISOString()
       };
 
