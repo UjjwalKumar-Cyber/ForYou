@@ -21,7 +21,7 @@ services:
       - key: ADMIN_PASSWORD
         sync: false
       - key: ACCOUNT_USERS
-        value: ""
+        sync: false
 
 databases:
   - name: foryou-db
