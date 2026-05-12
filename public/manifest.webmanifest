@@ -1,0 +1,18 @@
+{
+  "name": "ForyoU Letters",
+  "short_name": "ForyoU",
+  "description": "A private nostalgic messaging space for quiet letters and real-time chats.",
+  "start_url": "/admin",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#100d12",
+  "theme_color": "#2b1b25",
+  "icons": [
+    {
+      "src": "/assets/seal.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

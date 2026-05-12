@@ -10,7 +10,11 @@ const counter = document.querySelector("#character-count");
 const statusMessage = document.querySelector("#message-status");
 const button = form.querySelector("button[type='submit']");
 
-const IMAGE_MAX_BYTES = 3 * 1024 * 1024;
+const ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
+const ALLOWED_ATTACHMENT_TYPES = new Set([
+  "application/pdf",
+  "text/plain"
+]);
 
 function countCharacters(value) {
   return Array.from(value).length;
@@ -80,17 +84,23 @@ function selectedImageFile() {
 }
 
 function selectedImageError(file) {
-
   if (!file) {
     return "";
   }
 
-  if (file.type && !file.type.startsWith("image/")) {
-    return "Please choose a photo image file.";
+  const type = file.type || "";
+  const isKnownMedia =
+    type.startsWith("image/") ||
+    type.startsWith("video/") ||
+    type.startsWith("audio/") ||
+    ALLOWED_ATTACHMENT_TYPES.has(type);
+
+  if (type && !isKnownMedia) {
+    return "Please choose an image, video, audio, PDF, or text file.";
   }
 
-  if (file.size > IMAGE_MAX_BYTES) {
-    return "Please choose a photo under 3 MB.";
+  if (file.size > ATTACHMENT_MAX_BYTES) {
+    return "Please choose media under 8 MB.";
   }
 
   return "";
@@ -100,7 +110,7 @@ function updateImageName() {
   const file = selectedImageFile();
 
   if (!file) {
-    imageName.textContent = "Optional photo or camera capture, up to 3 MB.";
+    imageName.textContent = "Optional photo, video, audio, file, or camera capture, up to 8 MB.";
     return;
   }
 
@@ -109,7 +119,7 @@ function updateImageName() {
   if (error) {
     galleryImageInput.value = "";
     cameraImageInput.value = "";
-    imageName.textContent = "Optional photo or camera capture, up to 3 MB.";
+    imageName.textContent = "Optional photo, video, audio, file, or camera capture, up to 8 MB.";
     setStatus(error, "error");
     return;
   }
@@ -185,7 +195,7 @@ form.addEventListener("submit", async (event) => {
   payload.append("message", message);
 
   if (imageFile) {
-    payload.append("image", imageFile);
+    payload.append("attachment", imageFile);
   }
 
   button.disabled = true;
@@ -216,3 +226,9 @@ form.addEventListener("submit", async (event) => {
     button.disabled = false;
   }
 });
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  });
+}

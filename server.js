@@ -1,6 +1,7 @@
 require("dotenv").config();
 
 const crypto = require("crypto");
+const http = require("http");
 const path = require("path");
 const express = require("express");
 const rateLimit = require("express-rate-limit");
@@ -8,27 +9,44 @@ const session = require("express-session");
 const helmet = require("helmet");
 const multer = require("multer");
 const sanitizeHtml = require("sanitize-html");
+const { Server } = require("socket.io");
 
 const {
   addMessage,
   authenticateUser,
+  cleanupExpiredMessages,
   deleteMessage,
   findUser,
+  findAccessibleMessage,
   initStore,
+  listChatSummaries,
+  listConversationMessages,
+  listLetterMessages,
   listMessagesForUser,
+  listStarredMessages,
   listUsers,
+  markConversationRead,
   normalizeUsername,
+  toggleMessageReaction,
+  toggleMessageStar,
+  updateUserAvatar,
   updateUserPassword,
-  updateUserProfile
+  updateUserProfile,
+  updateUserSettings
 } = require("./src/storage/messages");
 
 const app = express();
+const httpServer = http.createServer(app);
+const io = new Server(httpServer, {
+  serveClient: true
+});
 
 const PORT = Number(process.env.PORT || 3000);
 const SECRET_PATH = "/secret-8392-love-note";
 const isProduction = process.env.NODE_ENV === "production";
 const ACTIVE_WINDOW_MS = 1000 * 60 * 2;
-const IMAGE_MAX_BYTES = 3 * 1024 * 1024;
+const ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
+const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
 const allowedImageTypes = new Set([
   "image/gif",
   "image/heic",
@@ -36,6 +54,21 @@ const allowedImageTypes = new Set([
   "image/jpeg",
   "image/png",
   "image/webp"
+]);
+const allowedAttachmentTypes = new Set([
+  ...allowedImageTypes,
+  "audio/aac",
+  "audio/m4a",
+  "audio/mpeg",
+  "audio/mp4",
+  "audio/ogg",
+  "audio/wav",
+  "audio/webm",
+  "application/pdf",
+  "text/plain",
+  "video/mp4",
+  "video/quicktime",
+  "video/webm"
 ]);
 const imageMimeByExtension = new Map([
   [".gif", "image/gif"],
@@ -46,18 +79,31 @@ const imageMimeByExtension = new Map([
   [".png", "image/png"],
   [".webp", "image/webp"]
 ]);
+const attachmentMimeByExtension = new Map([
+  ...imageMimeByExtension,
+  [".aac", "audio/aac"],
+  [".m4a", "audio/mp4"],
+  [".mp3", "audio/mpeg"],
+  [".ogg", "audio/ogg"],
+  [".wav", "audio/wav"],
+  [".webm", "video/webm"],
+  [".mp4", "video/mp4"],
+  [".mov", "video/quicktime"],
+  [".pdf", "application/pdf"],
+  [".txt", "text/plain"]
+]);
 
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: IMAGE_MAX_BYTES,
+    fileSize: ATTACHMENT_MAX_BYTES,
     files: 1
   },
   fileFilter: (req, file, callback) => {
-    const imageMime = getImageMime(file);
+    const attachmentMime = getAttachmentMime(file);
 
-    if (!imageMime) {
-      return callback(new Error("Please attach a photo image file only."));
+    if (!attachmentMime) {
+      return callback(new Error("Please attach an image, audio note, video, PDF, or text file."));
     }
 
     return callback(null, true);
@@ -101,6 +147,7 @@ const cspDirectives = {
   formAction: ["'self'"],
   frameAncestors: ["'none'"],
   imgSrc: ["'self'", "data:"],
+  mediaSrc: ["'self'", "data:", "blob:"],
   objectSrc: ["'none'"],
   scriptSrc: ["'self'"],
   styleSrc: ["'self'"]
@@ -133,8 +180,7 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: "12kb" }));
 app.use(express.urlencoded({ extended: false, limit: "12kb" }));
 
-app.use(
-  session({
+const sessionMiddleware = session({
     name: "private_love_note.sid",
     secret: SESSION_SECRET,
     resave: false,
@@ -146,8 +192,10 @@ app.use(
       sameSite: "strict",
       secure: isProduction
     }
-  })
-);
+  });
+
+app.use(sessionMiddleware);
+io.engine.use(sessionMiddleware);
 
 app.use((req, res, next) => {
   markUserActive(req.session.accountUser);
@@ -268,7 +316,7 @@ function isValidAccountUsername(input) {
 
 function pruneActiveUsers(now = Date.now()) {
   for (const [username, record] of activeUsers.entries()) {
-    if (!record || now - record.lastActiveAt > ACTIVE_WINDOW_MS) {
+    if (!record || (!record.socketCount && now - record.lastActiveAt > ACTIVE_WINDOW_MS)) {
       activeUsers.delete(username);
     }
   }
@@ -284,7 +332,11 @@ function isUserActive(username) {
   }
 
   const record = activeUsers.get(normalizedUsername);
-  return Boolean(record && !record.hideActiveStatus && now - record.lastActiveAt <= ACTIVE_WINDOW_MS);
+  return Boolean(
+    record &&
+      !record.anonymousMode &&
+      (record.socketCount > 0 || now - record.lastActiveAt <= ACTIVE_WINDOW_MS)
+  );
 }
 
 function markUserActive(user) {
@@ -294,9 +346,32 @@ function markUserActive(user) {
     return;
   }
 
+  const existing = activeUsers.get(username) || {};
+
   activeUsers.set(username, {
-    hideActiveStatus: Boolean(user.hideActiveStatus),
-    lastActiveAt: Date.now()
+    anonymousMode: Boolean(user.anonymousMode || user.hideActiveStatus),
+    lastActiveAt: Date.now(),
+    socketCount: Number(existing.socketCount || 0)
+  });
+}
+
+function updateSocketPresence(user, delta) {
+  const username = normalizeUsername(user && user.username);
+
+  if (!username) {
+    return;
+  }
+
+  const existing = activeUsers.get(username) || {
+    anonymousMode: Boolean(user.anonymousMode || user.hideActiveStatus),
+    lastActiveAt: Date.now(),
+    socketCount: 0
+  };
+
+  activeUsers.set(username, {
+    anonymousMode: Boolean(user.anonymousMode || user.hideActiveStatus),
+    lastActiveAt: Date.now(),
+    socketCount: Math.max(0, Number(existing.socketCount || 0) + delta)
   });
 }
 
@@ -317,23 +392,57 @@ function getImageMime(file) {
   return imageMimeByExtension.get(extension) || "";
 }
 
-function buildImagePayload(file) {
+function getAttachmentMime(file) {
+  if (allowedAttachmentTypes.has(file.mimetype)) {
+    return file.mimetype;
+  }
+
+  const extension = path.extname(file.originalname || "").toLowerCase();
+  return attachmentMimeByExtension.get(extension) || "";
+}
+
+function attachmentKindForMime(mime) {
+  if (mime.startsWith("image/")) {
+    return "image";
+  }
+  if (mime.startsWith("audio/")) {
+    return "audio";
+  }
+  if (mime.startsWith("video/")) {
+    return "video";
+  }
+  return "file";
+}
+
+function buildAttachmentPayload(file) {
   if (!file) {
     return null;
   }
 
-  const mime = getImageMime(file) || "image/jpeg";
+  const mime = getAttachmentMime(file) || "application/octet-stream";
 
   return {
     data: `data:${mime};base64,${file.buffer.toString("base64")}`,
     mime,
     name: cleanFileName(file.originalname),
-    size: file.size
+    size: file.size,
+    kind: attachmentKindForMime(mime)
   };
 }
 
-function handleImageUpload(req, res, next) {
-  upload.single("image")(req, res, (error) => {
+function pickUploadedFile(req) {
+  if (!req.files) {
+    return null;
+  }
+
+  return (req.files.attachment && req.files.attachment[0]) || (req.files.image && req.files.image[0]) || null;
+}
+
+function handleMessageUpload(req, res, next) {
+  upload.fields([
+    { name: "attachment", maxCount: 1 },
+    { name: "image", maxCount: 1 }
+  ])(req, res, (error) => {
     if (!error) {
       return next();
     }
@@ -341,26 +450,150 @@ function handleImageUpload(req, res, next) {
     noStore(res);
 
     if (error instanceof multer.MulterError && error.code === "LIMIT_FILE_SIZE") {
-      return res.status(400).json({ error: "Please keep the photo under 3 MB." });
+      return res.status(400).json({ error: "Please keep attachments under 8 MB." });
     }
 
     return res.status(400).json({
-      error: error.message || "The photo could not be uploaded."
+      error: error.message || "The attachment could not be uploaded."
     });
+  });
+}
+
+const avatarUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: AVATAR_MAX_BYTES,
+    files: 1
+  },
+  fileFilter: (req, file, callback) => {
+    if (!getImageMime(file)) {
+      return callback(new Error("Please choose a profile image."));
+    }
+
+    return callback(null, true);
+  }
+});
+
+function handleAvatarUpload(req, res, next) {
+  avatarUpload.single("avatar")(req, res, (error) => {
+    if (!error) {
+      return next();
+    }
+
+    noStore(res);
+
+    if (error instanceof multer.MulterError && error.code === "LIMIT_FILE_SIZE") {
+      return res.status(400).json({ error: "Please keep the profile photo under 2 MB." });
+    }
+
+    return res.status(400).json({ error: error.message || "Profile photo upload failed." });
   });
 }
 
 function publicAccount(user) {
   const username = normalizeUsername(user.username);
-  const hideActiveStatus = Boolean(user.hideActiveStatus);
+  const anonymousMode = Boolean(user.anonymousMode || user.hideActiveStatus);
 
   return {
     username,
     displayName: user.displayName || user.username,
-    hideActiveStatus,
-    isActive: !hideActiveStatus && isUserActive(username)
+    bio: user.bio || "",
+    email: user.email || "",
+    emailVerified: Boolean(user.emailVerified),
+    profileImageData: user.profileImageData || "",
+    profileImageMime: user.profileImageMime || "",
+    anonymousMode,
+    theme: user.theme || "vintage-dark",
+    wallpaper: user.wallpaper || "paper",
+    fontStyle: user.fontStyle || "serif",
+    themeColor: user.themeColor || "rose",
+    isActive: !anonymousMode && isUserActive(username)
   };
 }
+
+function publicRecipient(user) {
+  const account = publicAccount(user);
+
+  return {
+    username: account.username,
+    displayName: account.displayName,
+    bio: account.bio,
+    profileImageData: account.profileImageData,
+    profileImageMime: account.profileImageMime,
+    anonymousMode: account.anonymousMode,
+    isActive: account.isActive
+  };
+}
+
+function userRoom(username) {
+  return `user:${normalizeUsername(username)}`;
+}
+
+async function emitPresenceUpdate() {
+  try {
+    const users = (await listUsers()).map(publicRecipient);
+    io.emit("presence:update", { users });
+  } catch (error) {
+    console.error("Could not emit presence update.", error);
+  }
+}
+
+function emitConversationUpdate(senderUsername, recipientUsername, message) {
+  io.to(userRoom(senderUsername)).emit("chat:message", { message });
+  io.to(userRoom(recipientUsername)).emit("chat:message", { message });
+}
+
+function emitLetterUpdate(recipientUsername, message) {
+  io.to(userRoom(recipientUsername)).emit("chat:message", { message, letter: true });
+}
+
+function emitMessageMutation(message, eventName) {
+  if (message.senderUsername) {
+    io.to(userRoom(message.senderUsername)).emit(eventName, { message });
+  }
+  io.to(userRoom(message.recipientUsername)).emit(eventName, { message });
+}
+
+io.use((socket, next) => {
+  const accountUser = socket.request.session && socket.request.session.accountUser;
+
+  if (!accountUser || !accountUser.username) {
+    return next(new Error("unauthorized"));
+  }
+
+  socket.accountUser = publicAccount(accountUser);
+  return next();
+});
+
+io.on("connection", (socket) => {
+  const account = socket.accountUser;
+  socket.join(userRoom(account.username));
+  updateSocketPresence(account, 1);
+  emitPresenceUpdate();
+
+  socket.on("chat:typing", async ({ recipientUsername, typing }) => {
+    try {
+      const recipient = normalizeUsername(recipientUsername);
+
+      if (!recipient || account.anonymousMode) {
+        return;
+      }
+
+      io.to(userRoom(recipient)).emit("chat:typing", {
+        from: account.username,
+        displayName: account.displayName,
+        typing: Boolean(typing)
+      });
+    } catch (error) {
+      console.error("Typing event failed.", error);
+    }
+  });
+
+  socket.on("disconnect", () => {
+    updateSocketPresence(account, -1);
+    emitPresenceUpdate();
+  });
+});
 
 app.get("/robots.txt", (req, res) => {
   res.type("text/plain").send("User-agent: *\nDisallow: /\n");
@@ -381,6 +614,10 @@ app.get(SECRET_PATH, (req, res) => {
 
 app.get("/admin", (req, res) => {
   sendView(res, "admin.html");
+});
+
+app.get("/profile", (req, res) => {
+  sendView(res, "profile.html");
 });
 
 app.post("/api/login", loginLimiter, async (req, res, next) => {
@@ -423,17 +660,21 @@ app.post("/api/login", loginLimiter, async (req, res, next) => {
   }
 });
 
-app.post("/api/message", requireMessageAccess, messageLimiter, handleImageUpload, async (req, res, next) => {
+app.post("/api/message", requireMessageAccess, messageLimiter, handleMessageUpload, async (req, res, next) => {
   try {
     noStore(res);
 
     const accountUser = req.session.accountUser || null;
     const text = cleanMessage(req.body.message);
-    const image = buildImagePayload(req.file);
+    const attachment = buildAttachmentPayload(pickUploadedFile(req));
     const senderName = accountUser
       ? cleanSenderName(accountUser.displayName || accountUser.username)
       : cleanSenderName(req.body.senderName);
+    const senderUsername = accountUser ? normalizeUsername(accountUser.username) : "";
     const recipientUsername = normalizeUsername(req.body.recipientUsername);
+    const replyToId = /^[a-f0-9-]{36}$/i.test(String(req.body.replyToId || ""))
+      ? String(req.body.replyToId)
+      : null;
     const length = Array.from(text).length;
 
     if (!senderName) {
@@ -444,8 +685,8 @@ app.post("/api/message", requireMessageAccess, messageLimiter, handleImageUpload
       return res.status(400).json({ error: "Please keep the sender name short." });
     }
 
-    if (!text && !image) {
-      return res.status(400).json({ error: "Write a message or add a photo before sending." });
+    if (!text && !attachment) {
+      return res.status(400).json({ error: "Write a message or add media before sending." });
     }
 
     if (length > 500) {
@@ -458,16 +699,35 @@ app.post("/api/message", requireMessageAccess, messageLimiter, handleImageUpload
       return res.status(400).json({ error: "Please choose a valid recipient." });
     }
 
-    await addMessage({
+    if (replyToId) {
+      const replyTarget = await findAccessibleMessage(replyToId, accountUser ? accountUser.username : recipient.username);
+
+      if (!replyTarget) {
+        return res.status(400).json({ error: "The replied message is no longer available." });
+      }
+    }
+
+    const message = await addMessage({
       text,
       senderName,
+      senderUsername,
       recipientUsername: recipient.username,
-      image
+      attachment,
+      image: attachment && attachment.kind === "image" ? attachment : null,
+      kind: attachment ? attachment.kind : "text",
+      replyToId
     });
+
+    if (senderUsername) {
+      emitConversationUpdate(senderUsername, recipient.username, message);
+    } else {
+      emitLetterUpdate(recipient.username, message);
+    }
 
     return res.status(201).json({
       ok: true,
-      message: "Your message was sent."
+      message: "Your message was sent.",
+      item: message
     });
   } catch (error) {
     return next(error);
@@ -477,7 +737,7 @@ app.post("/api/message", requireMessageAccess, messageLimiter, handleImageUpload
 app.get("/api/recipients", requireMessageAccess, async (req, res, next) => {
   try {
     noStore(res);
-    const recipients = (await listUsers()).map(publicAccount);
+    const recipients = (await listUsers()).map(publicRecipient);
     return res.json({ recipients });
   } catch (error) {
     return next(error);
@@ -491,18 +751,38 @@ app.get("/api/session", (req, res) => {
   });
 });
 
-app.patch("/api/settings/active-status", requireAccount, (req, res) => {
+async function saveAnonymousMode(req, res, next) {
   noStore(res);
 
-  const hideActiveStatus = Boolean(req.body && req.body.hideActiveStatus);
-  req.session.accountUser.hideActiveStatus = hideActiveStatus;
-  markUserActive(req.session.accountUser);
+  const anonymousMode = Boolean(
+    req.body && (req.body.anonymousMode !== undefined ? req.body.anonymousMode : req.body.hideActiveStatus)
+  );
 
-  return res.json({
-    ok: true,
-    user: publicAccount(req.session.accountUser)
-  });
-});
+  try {
+    const updated = await updateUserSettings(req.session.accountUser.username, {
+      ...req.session.accountUser,
+      anonymousMode
+    });
+
+    if (!updated) {
+      return res.status(404).json({ error: "Account was not found." });
+    }
+
+    req.session.accountUser = publicAccount(updated);
+    markUserActive(req.session.accountUser);
+    emitPresenceUpdate();
+
+    return res.json({
+      ok: true,
+      user: publicAccount(req.session.accountUser)
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+app.patch("/api/settings/anonymous-mode", requireAccount, saveAnonymousMode);
+app.patch("/api/settings/active-status", requireAccount, saveAnonymousMode);
 
 app.patch("/api/account/profile", requireAccount, async (req, res, next) => {
   noStore(res);
@@ -524,20 +804,21 @@ app.patch("/api/account/profile", requireAccount, async (req, res, next) => {
       return res.status(409).json({ error: "That username is already taken." });
     }
 
+    const fullUpdatedUser = (await findUser(updatedUser.username)) || updatedUser;
     const oldActiveRecord = activeUsers.get(normalizeUsername(currentUsername));
     activeUsers.delete(normalizeUsername(currentUsername));
     req.session.accountUser = {
       ...publicAccount({
-        ...updatedUser,
-        hideActiveStatus: req.session.accountUser.hideActiveStatus
+        ...fullUpdatedUser,
+        anonymousMode: req.session.accountUser.anonymousMode
       }),
-      hideActiveStatus: Boolean(req.session.accountUser.hideActiveStatus)
+      anonymousMode: Boolean(req.session.accountUser.anonymousMode)
     };
 
     if (oldActiveRecord) {
       activeUsers.set(req.session.accountUser.username, {
         ...oldActiveRecord,
-        hideActiveStatus: req.session.accountUser.hideActiveStatus,
+        anonymousMode: req.session.accountUser.anonymousMode,
         lastActiveAt: Date.now()
       });
     } else {
@@ -548,6 +829,58 @@ app.patch("/api/account/profile", requireAccount, async (req, res, next) => {
       ok: true,
       user: publicAccount(req.session.accountUser)
     });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get("/api/profile", requireAccount, (req, res) => {
+  noStore(res);
+  return res.json({ user: publicAccount(req.session.accountUser) });
+});
+
+app.patch("/api/profile", requireAccount, async (req, res, next) => {
+  noStore(res);
+
+  try {
+    const updated = await updateUserSettings(req.session.accountUser.username, {
+      displayName: cleanDisplayName(req.body.displayName).slice(0, 60),
+      bio: cleanText(req.body.bio).slice(0, 240),
+      email: cleanText(req.body.email).slice(0, 160),
+      anonymousMode: Boolean(req.body.anonymousMode),
+      theme: cleanText(req.body.theme).slice(0, 40) || "vintage-dark",
+      wallpaper: cleanText(req.body.wallpaper).slice(0, 40) || "paper",
+      fontStyle: cleanText(req.body.fontStyle).slice(0, 40) || "serif",
+      themeColor: cleanText(req.body.themeColor).slice(0, 40) || "rose"
+    });
+
+    if (!updated) {
+      return res.status(404).json({ error: "Account was not found." });
+    }
+
+    req.session.accountUser = publicAccount(updated);
+    markUserActive(req.session.accountUser);
+    emitPresenceUpdate();
+    return res.json({ ok: true, user: publicAccount(req.session.accountUser) });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post("/api/profile/avatar", requireAccount, handleAvatarUpload, async (req, res, next) => {
+  noStore(res);
+
+  try {
+    const avatar = req.file ? buildAttachmentPayload(req.file) : null;
+    const updated = await updateUserAvatar(req.session.accountUser.username, avatar);
+
+    if (!updated) {
+      return res.status(404).json({ error: "Account was not found." });
+    }
+
+    req.session.accountUser = publicAccount(updated);
+    emitPresenceUpdate();
+    return res.json({ ok: true, user: publicAccount(req.session.accountUser) });
   } catch (error) {
     return next(error);
   }
@@ -591,6 +924,142 @@ app.post("/api/logout", (req, res, next) => {
     noStore(res);
     return res.json({ ok: true });
   });
+});
+
+app.get("/api/chats", requireAccount, async (req, res, next) => {
+  try {
+    noStore(res);
+    const [summaries, users] = await Promise.all([
+      listChatSummaries(req.session.accountUser.username),
+      listUsers()
+    ]);
+    const userMap = new Map(users.map((user) => [user.username, publicRecipient(user)]));
+    const conversations = summaries.map((summary) => ({
+      ...summary,
+      peer:
+        summary.peerUsername === "__letters__"
+          ? {
+              username: "__letters__",
+              displayName: "Anonymous letters",
+              bio: "Notes sent through your private page.",
+              profileImageData: "",
+              anonymousMode: true,
+              isActive: false
+            }
+          : userMap.get(summary.peerUsername) || {
+              username: summary.peerUsername,
+              displayName: summary.peerUsername,
+              isActive: false
+            }
+    }));
+
+    return res.json({ conversations });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get("/api/chats/:peer/messages", requireAccount, async (req, res, next) => {
+  try {
+    noStore(res);
+    const peer = normalizeUsername(req.params.peer);
+    const query = String(req.query.q || "");
+    const messages =
+      req.params.peer === "__letters__"
+        ? await listLetterMessages(req.session.accountUser.username, query)
+        : await listConversationMessages(req.session.accountUser.username, peer, query);
+
+    return res.json({ messages });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post("/api/chats/:peer/read", requireAccount, async (req, res, next) => {
+  try {
+    noStore(res);
+
+    if (req.session.accountUser.anonymousMode) {
+      return res.json({ ok: true, hidden: true, ids: [] });
+    }
+
+    const includeLetters = req.params.peer === "__letters__";
+    const peer = normalizeUsername(req.params.peer);
+    const result = await markConversationRead(req.session.accountUser.username, peer, includeLetters);
+
+    if (!includeLetters && result.ids.length) {
+      io.to(userRoom(peer)).emit("chat:read", {
+        by: req.session.accountUser.username,
+        ids: result.ids,
+        readAt: result.readAt
+      });
+    }
+
+    return res.json({ ok: true, ...result });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get("/api/messages/starred", requireAccount, async (req, res, next) => {
+  try {
+    noStore(res);
+    const messages = await listStarredMessages(req.session.accountUser.username);
+    return res.json({ messages });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post("/api/messages/:id/star", requireAccount, async (req, res, next) => {
+  try {
+    noStore(res);
+    const message = await toggleMessageStar(req.params.id, req.session.accountUser.username);
+
+    if (!message) {
+      return res.status(404).json({ error: "Message not found." });
+    }
+
+    emitMessageMutation(message, "chat:starred");
+    return res.json({ ok: true, message });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post("/api/messages/:id/reactions", requireAccount, async (req, res, next) => {
+  try {
+    noStore(res);
+    const emoji = cleanText(req.body.emoji).slice(0, 16);
+
+    if (!emoji) {
+      return res.status(400).json({ error: "Choose a reaction first." });
+    }
+
+    const message = await toggleMessageReaction(req.params.id, req.session.accountUser.username, emoji);
+
+    if (!message) {
+      return res.status(404).json({ error: "Message not found." });
+    }
+
+    emitMessageMutation(message, "chat:reaction");
+    return res.json({ ok: true, message });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get("/api/active-friends", requireAccount, async (req, res, next) => {
+  try {
+    noStore(res);
+    const current = normalizeUsername(req.session.accountUser.username);
+    const users = (await listUsers())
+      .map(publicRecipient)
+      .filter((user) => user.username !== current && user.isActive);
+    return res.json({ users });
+  } catch (error) {
+    return next(error);
+  }
 });
 
 app.get("/api/messages", requireAccount, async (req, res, next) => {
@@ -642,7 +1111,13 @@ app.use((error, req, res, next) => {
 
 initStore()
   .then(() => {
-    app.listen(PORT, () => {
+    setInterval(() => {
+      cleanupExpiredMessages().catch((error) => {
+        console.error("Expired message cleanup failed.", error);
+      });
+    }, 60 * 60 * 1000);
+
+    httpServer.listen(PORT, () => {
       console.log(`Private anonymous messaging site running on http://localhost:${PORT}`);
       console.log(`Secret page: http://localhost:${PORT}${SECRET_PATH}`);
       console.log(`Admin page: http://localhost:${PORT}/admin`);

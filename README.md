@@ -1,8 +1,8 @@
 # ForyoU
 
-ForyoU is a complete Node.js and Express private messaging site. The secret page is password-protected, accepts messages up to 500 characters with a sender name and optional photo, stores them with timestamps, and lets each inbox account log in with its own username and password to read only the messages sent to that account.
+ForyoU is a private, nostalgic messaging website built with Node.js, Express, Socket.IO, and SQLite-style JSON storage locally or Postgres on Render. It has a password-protected secret note page plus logged-in account chats with realtime delivery, media sharing, profiles, voice notes, starred messages, and a warm handwritten-letter style UI.
 
-Locally, messages are saved in `data/messages.json`. On Render, the included Blueprint uses Render Postgres through `DATABASE_URL` so the app can run on Render's free web service plan.
+Locally, data is saved in `data/messages.json`. On Render, the included Blueprint uses Render Postgres through `DATABASE_URL`.
 
 ## Folder Structure
 
@@ -16,17 +16,25 @@ foryou/
 │   │   └── seal.svg
 │   ├── css/
 │   │   └── styles.css
-│   └── js/
-│       ├── admin.js
-│       ├── message.js
-│       └── secret-login.js
+│   ├── js/
+│   │   ├── admin.js
+│   │   ├── message.js
+│   │   ├── profile.js
+│   │   └── secret-login.js
+│   ├── manifest.webmanifest
+│   └── sw.js
+├── scripts/
+│   └── hash-password.js
 ├── src/
+│   ├── security/
+│   │   └── passwords.js
 │   └── storage/
 │       └── messages.js
 ├── views/
 │   ├── admin.html
 │   ├── message.html
-│   └── password.html
+│   ├── password.html
+│   └── profile.html
 ├── .env.example
 ├── .gitignore
 ├── package.json
@@ -38,31 +46,26 @@ foryou/
 ## Features
 
 - Secret private route: `/secret-8392-love-note`
-- Password screen before the message page
-- Message form with sender name, recipient inbox, optional photo upload, and a 500 character limit
-- Camera/photo input on mobile devices
-- Timestamped message storage in `data/messages.json`
-- Render deployment stores messages in Postgres when `DATABASE_URL` is present
-- Account inbox dashboard at `/admin`
-- Username/password inbox login
-- Logged-in accounts can send messages to other inbox accounts
-- Auto-refreshing messages
-- Active status indicators for signed-in users
-- Account setting to hide active status from other users
-- Account settings to change username and password
-- New incoming messages are highlighted in each account
-- Clean side menu for username, active status, refresh, and logout
-- Logout button
-- Long-lived signed-in sessions
-- Delete button for each message
-- `helmet` security headers
-- `express-rate-limit` on login and message submission
+- Password screen before the public note form
+- Sender name, recipient picker, 500 character limit, and media upload up to 8 MB
+- Account login at `/admin`
+- Built-in first-run accounts: `Kabir` / `Kabir@` and `Kaish` / `Kaish@`
+- Realtime chat delivery with Socket.IO
+- Typing indicator, read receipts, replies, emoji reactions, and search
+- Voice notes, images, videos, PDFs, and text file sharing
+- Message highlights for new incoming messages
+- Active friends strip with online indicators
+- Anonymous Mode to hide active status, typing, and read receipts
+- Starred messages that stay saved
+- Normal messages auto-expire after 24 hours unless starred
+- Profile settings for display name, username, password, profile photo, bio, email, theme, wallpaper, font, and color
+- Mobile-first nostalgic letter UI with dark, light, and midnight themes
+- PWA manifest and service worker for app-like loading of static assets
+- Long-lived sessions with manual logout
+- `helmet` security headers and `express-rate-limit`
 - Server-side sanitization with `sanitize-html`
-- Client-side rendering with `textContent` to avoid XSS
-- Sender display names are saved with messages so recipients can see who sent them
-- No sender email, IP address, or login attempt details are saved with messages
-- `noindex, nofollow` meta tags and `robots.txt` crawler block
-- Mobile-first dark romantic UI
+- Client-side rendering avoids injecting user text as HTML
+- `noindex, nofollow` meta tags and `robots.txt` crawler deny rule
 
 ## Setup
 
@@ -71,7 +74,7 @@ npm install
 cp .env.example .env
 ```
 
-Edit `.env` and replace the default values:
+Edit `.env`:
 
 ```bash
 MESSAGE_PAGE_PASSWORD=your-secret-page-password
@@ -80,31 +83,22 @@ ADMIN_PASSWORD=your-admin-password
 SESSION_SECRET=generate-a-long-random-string
 ```
 
-The default inbox account is seeded from `ADMIN_USERNAME` and `ADMIN_PASSWORD`.
+Generate a session secret:
 
-To add more inbox accounts without manually editing the database, set:
+```bash
+node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+```
+
+Optional extra accounts can be seeded with:
 
 ```bash
 ACCOUNT_USERS=ujjwal:password123,aavnya:anotherpassword
 ```
 
-To manually add an account in Postgres, first generate a password hash:
+The app stores password hashes, not readable passwords. To manually create a hashed password:
 
 ```bash
 npm run hash-password -- your-password
-```
-
-Then insert it into the `inbox_users` table:
-
-```sql
-INSERT INTO inbox_users (username, display_name, password_hash)
-VALUES ('ujjwal', 'Ujjwal', 'PASTE_HASH_HERE');
-```
-
-You can generate a session secret with:
-
-```bash
-node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
 ```
 
 ## Run Locally
@@ -116,138 +110,96 @@ npm run dev
 Open:
 
 - Secret page: `http://localhost:3000/secret-8392-love-note`
-- Inbox login page: `http://localhost:3000/admin`
+- Account inbox: `http://localhost:3000/admin`
+- Profile settings: `http://localhost:3000/profile`
 
-For a production-like local run:
+If no `.env` is present, development fallback passwords are:
 
-```bash
-npm start
-```
+- Secret page: `open-the-secret-note`
+- Admin account: `admin` / `admin-love-notes`
 
-## API Routes
+## Main Routes
 
 ```text
 GET    /secret-8392-love-note
-POST   /api/login
-POST   /api/message
 GET    /admin
+GET    /profile
+POST   /api/login
+POST   /api/logout
+POST   /api/message
 GET    /api/session
 GET    /api/recipients
+GET    /api/chats
+GET    /api/chats/:peer/messages
+POST   /api/chats/:peer/read
 GET    /api/messages
+GET    /api/messages/starred
+POST   /api/messages/:id/star
+POST   /api/messages/:id/reactions
 DELETE /api/messages/:id
-PATCH  /api/settings/active-status
+GET    /api/profile
+PATCH  /api/profile
+POST   /api/profile/avatar
 PATCH  /api/account/profile
 PATCH  /api/account/password
-POST   /api/logout
+PATCH  /api/settings/anonymous-mode
+GET    /api/active-friends
 ```
 
-`POST /api/login` accepts:
-
-```json
-{
-  "scope": "secret",
-  "password": "message-page-password"
-}
-```
-
-or:
-
-```json
-{
-  "scope": "account",
-  "username": "admin",
-  "password": "admin-password"
-}
-```
-
-`POST /api/message` accepts JSON for text-only messages:
-
-```json
-{
-  "senderName": "Sender name",
-  "recipientUsername": "admin",
-  "message": "Your anonymous note"
-}
-```
-
-For messages with photos, send `multipart/form-data` with:
+`POST /api/message` accepts `multipart/form-data`:
 
 ```text
 senderName=Sender name
-recipientUsername=admin
-message=Your anonymous note
-image=@photo.png
+recipientUsername=kabir
+message=Your note
+attachment=@photo.png
+replyToId=optional-message-id
 ```
 
-The photo field is optional, but each message must include text, a photo, or both. Photos are limited to 3 MB.
+Logged-in users can send account-to-account messages from the chat composer; public visitors can send through the secret note page after entering the secret password.
 
 ## Render Deployment
 
 ### Option 1: Render Blueprint
 
-This repo includes `render.yaml`, so Render can create the web service, a Postgres database, and the required production environment settings.
-
-1. Push this project to a GitHub repository named `ForyoU` or `foryou`.
-2. In Render, choose **New +** and then **Blueprint**.
-3. Connect your GitHub repository.
-4. Render will read `render.yaml`.
-5. When Render asks for secret values, add:
+1. Push this project to GitHub.
+2. In Render, choose **New +** then **Blueprint**.
+3. Connect the GitHub repository.
+4. Render reads `render.yaml` and creates:
+   - Web service: `foryou`
+   - Postgres database: `foryou-db`
+5. When Render asks for secret values, set:
    - `MESSAGE_PAGE_PASSWORD`
    - `ADMIN_PASSWORD`
    - optional `ACCOUNT_USERS`
 6. Deploy.
 
-The Blueprint uses:
-
-- Web service plan: `free`
-- Database plan: `free`
-- Database access: internal/private only
-
-Render's free Postgres databases expire 30 days after creation. Upgrade the database before then if you want to keep messages long-term.
+Your live URL may look like `https://foryou-zbm5.onrender.com`; the service name inside Render can still be `foryou`.
 
 ### Option 2: Manual Web Service
 
-1. Push this project to a GitHub repository named `ForyoU` or `foryou`.
-2. In Render, create a new **Web Service** from that repository.
-3. Use these settings:
+1. Create a Render **Web Service** from the GitHub repo.
+2. Use:
    - Environment: `Node`
    - Build Command: `npm install`
    - Start Command: `npm start`
-4. Add environment variables:
+3. Add environment variables:
    - `NODE_ENV=production`
    - `MESSAGE_PAGE_PASSWORD=your-secret-page-password`
-   - `ADMIN_PASSWORD=your-admin-password`
    - `ADMIN_USERNAME=admin`
-   - optional `ACCOUNT_USERS=username:password,another:password`
+   - `ADMIN_PASSWORD=your-admin-password`
    - `SESSION_SECRET=a-long-random-string`
-   - `DATA_DIR=/var/data`
-5. Create a Render Postgres database and add its internal connection string as:
-   - `DATABASE_URL=your-render-postgres-connection-string`
+   - optional `ACCOUNT_USERS=username:password,another:password`
+4. Create a Render Postgres database.
+5. Add its internal connection string as `DATABASE_URL`.
 6. Deploy.
 
 After deployment:
 
-- Secret page: `https://foryou.onrender.com/secret-8392-love-note` or your Render-generated URL
-- Admin page: `https://foryou.onrender.com/admin` or your Render-generated URL
+- Secret page: `https://your-render-url/secret-8392-love-note`
+- Account inbox: `https://your-render-url/admin`
+- Profile settings: `https://your-render-url/profile`
 
-## Notes
+## Privacy Notes
 
-Local JSON messages are stored as:
-
-```json
-{
-  "id": "random-uuid",
-  "text": "sanitized message text",
-  "senderName": "Sender name",
-  "recipientUsername": "admin",
-  "createdAt": "2026-05-06T00:00:00.000Z",
-  "image": {
-    "data": "data:image/png;base64,...",
-    "mime": "image/png",
-    "name": "photo.png",
-    "size": 12345
-  }
-}
-```
-
-The app stores the sender display name because inbox users asked to see who sent a message. It does not persist sender emails, IP addresses, or login attempts. Rate limiting uses the current browser session as its key and keeps counters only in memory.
+The app saves message text, sender display name, recipient username, timestamps, media data, profile settings, and password hashes. It does not save sender email, sender IP address, or public visitor login details with messages. Rate limiting uses the current browser session as its key and stores counters only in memory.

@@ -4,71 +4,115 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="robots" content="noindex, nofollow">
-    <title>ForyoU Admin</title>
-    <link rel="stylesheet" href="/css/styles.css?v=20260512-2">
+    <meta name="theme-color" content="#2b1b25">
+    <title>ForyoU Letters</title>
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="stylesheet" href="/css/styles.css?v=20260512-3">
   </head>
   <body>
     <main class="page-shell admin-shell">
       <section class="card admin-login-card" id="admin-login-panel" aria-labelledby="admin-login-title">
         <img class="seal" src="/assets/seal.svg" alt="" width="76" height="76">
-        <p class="eyebrow">ForyoU Admin</p>
-        <h1 id="admin-login-title">Private inbox</h1>
-        <p class="soft-copy">Log in with the username and password made for your account.</p>
+        <p class="eyebrow">ForyoU Letters</p>
+        <h1 id="admin-login-title">Open your private desk.</h1>
+        <p class="soft-copy">A quiet place for chats, letters, voice notes, and the words people keep.</p>
 
         <form class="stack" id="admin-login-form" novalidate>
           <input type="hidden" name="scope" value="account">
 
           <label class="field-label" for="admin-username">Username</label>
-          <input
-            class="text-input"
-            id="admin-username"
-            name="username"
-            type="text"
-            autocomplete="username"
-            required
-          >
+          <input class="text-input" id="admin-username" name="username" type="text" autocomplete="username" required>
 
           <label class="field-label" for="admin-password">Password</label>
-          <input
-            class="text-input"
-            id="admin-password"
-            name="password"
-            type="password"
-            autocomplete="current-password"
-            required
-          >
+          <input class="text-input" id="admin-password" name="password" type="password" autocomplete="current-password" required>
 
           <p class="form-message" id="admin-login-message" role="status" aria-live="polite"></p>
-
           <button class="button primary-button" type="submit">Open inbox</button>
         </form>
       </section>
 
-      <section class="admin-panel is-hidden" id="messages-panel" aria-labelledby="messages-title">
-        <div class="admin-header">
-          <div>
-            <p class="eyebrow">ForyoU Admin</p>
-            <h1 id="messages-title">Your messages</h1>
-            <p class="presence-line"><span class="presence-dot is-active" aria-hidden="true"></span>Live inbox</p>
+      <section class="letter-app is-hidden" id="messages-panel" aria-labelledby="messages-title">
+        <aside class="letter-sidebar">
+          <div class="letter-brand">
+            <div>
+              <p class="eyebrow">ForyoU Letters</p>
+              <h1 id="messages-title">Chats</h1>
+            </div>
+            <button class="menu-button" id="account-menu-button" type="button" aria-label="Open account menu" aria-expanded="false">
+              <span></span>
+              <span></span>
+              <span></span>
+            </button>
           </div>
-          <button
-            class="menu-button"
-            id="account-menu-button"
-            type="button"
-            aria-label="Open account menu"
-            aria-expanded="false"
-          >
-            <span></span>
-            <span></span>
-            <span></span>
-          </button>
-        </div>
+
+          <div class="active-strip" id="active-friends" aria-label="Active friends"></div>
+
+          <div class="search-wrap">
+            <input class="text-input compact-input" id="chat-search" type="search" placeholder="Search chats">
+          </div>
+
+          <div class="chat-list" id="chat-list"></div>
+          <p class="form-message" id="admin-status" role="status" aria-live="polite"></p>
+        </aside>
+
+        <section class="conversation-panel" aria-label="Conversation">
+          <header class="conversation-header">
+            <div class="message-identity">
+              <span class="sender-avatar large-avatar" id="peer-avatar" aria-hidden="true">F</span>
+              <div>
+                <p class="message-sender" id="peer-name">Choose a chat</p>
+                <p class="presence-line" id="peer-status">Messages arrive like little letters.</p>
+              </div>
+            </div>
+            <div class="conversation-actions">
+              <button class="button secondary-button compact-button" id="starred-button" type="button">Starred</button>
+            </div>
+          </header>
+
+          <div class="letter-alerts" id="letter-alerts"></div>
+
+          <div class="conversation-tools">
+            <input class="text-input compact-input" id="message-search" type="search" placeholder="Search this conversation">
+          </div>
+
+          <div class="conversation-scroll" id="message-list"></div>
+
+          <div class="reply-preview is-hidden" id="reply-preview">
+            <span id="reply-preview-text"></span>
+            <button class="close-button" id="cancel-reply-button" type="button">Cancel</button>
+          </div>
+
+          <form class="composer" id="account-message-form" novalidate>
+            <input type="hidden" id="account-recipient" name="recipientUsername">
+            <input type="hidden" id="reply-to-id" name="replyToId">
+            <textarea class="textarea compact-textarea" id="account-message" name="message" maxlength="500" rows="3" placeholder="Write like a letter..."></textarea>
+
+            <div class="composer-actions">
+              <label class="photo-action" for="account-gallery-image">Choose photo</label>
+              <input class="visually-hidden" id="account-gallery-image" type="file" accept="image/*,video/*,audio/*,.pdf,.txt">
+
+              <label class="photo-action primary-photo-action" for="account-camera-image">Click photo</label>
+              <input class="visually-hidden" id="account-camera-image" type="file" accept="image/*" capture="environment">
+
+              <button class="clear-file-button" id="record-audio-button" type="button">Voice note</button>
+              <button class="clear-file-button" id="clear-account-image" type="button">Clear</button>
+              <button class="button primary-button send-button" id="account-send-button" type="submit">Send</button>
+            </div>
+
+            <div class="form-row">
+              <p class="file-hint" id="account-image-name">Text, photo, video, file, or voice note. Starred messages stay saved.</p>
+              <p class="counter"><span id="account-character-count">0</span>/500</p>
+            </div>
+            <p class="form-message" id="account-message-status" role="status" aria-live="polite"></p>
+            <p class="typing-line" id="typing-status"></p>
+          </form>
+        </section>
 
         <div class="drawer-backdrop is-hidden" id="drawer-backdrop"></div>
         <aside class="account-drawer is-hidden" id="account-drawer" aria-hidden="true">
           <div class="drawer-topline">
             <div>
-              <p class="eyebrow">Account</p>
+              <p class="eyebrow">Profile</p>
               <div class="drawer-user-row">
                 <span class="presence-dot is-active" id="account-presence-dot" aria-hidden="true"></span>
                 <h2 id="inbox-user">Signed in</h2>
@@ -77,144 +121,63 @@
             <button class="close-button" id="account-menu-close" type="button" aria-label="Close account menu">Close</button>
           </div>
           <p class="presence-line drawer-presence"><span id="active-status">Active now</span></p>
+
           <div class="drawer-section">
-            <p class="drawer-label">Settings</p>
-            <label class="toggle-row" for="hide-active-toggle">
-              <input id="hide-active-toggle" type="checkbox">
+            <p class="drawer-label">Privacy</p>
+            <label class="toggle-row" for="anonymous-mode-toggle">
+              <input id="anonymous-mode-toggle" type="checkbox">
               <span>
-                <strong>Hide active status</strong>
-                <small>Others will see you as offline.</small>
+                <strong>Anonymous Mode</strong>
+                <small>Hides active status, typing, and read receipts.</small>
               </span>
               <span class="toggle-track" aria-hidden="true"></span>
             </label>
             <p class="file-hint" id="privacy-status"></p>
           </div>
-          <form class="drawer-section drawer-form" id="account-profile-form" novalidate>
-            <label class="drawer-label" for="account-username">Username</label>
-            <input
-              class="text-input compact-input"
-              id="account-username"
-              name="username"
-              type="text"
-              minlength="3"
-              maxlength="32"
-              autocomplete="username"
-              required
-            >
-            <p class="file-hint">Used for login. Letters, numbers, dot, dash, underscore.</p>
-            <p class="file-hint" id="profile-status" role="status" aria-live="polite"></p>
-            <button class="button secondary-button" id="save-profile-button" type="submit">Save username</button>
-          </form>
-          <form class="drawer-section drawer-form" id="account-password-form" novalidate>
-            <label class="drawer-label" for="account-new-password">Password</label>
-            <input
-              class="text-input compact-input"
-              id="account-new-password"
-              name="password"
-              type="password"
-              minlength="4"
-              maxlength="128"
-              autocomplete="new-password"
-              required
-            >
-            <p class="file-hint" id="password-status" role="status" aria-live="polite"></p>
-            <button class="button secondary-button" id="save-password-button" type="submit">Save password</button>
-          </form>
+
           <div class="drawer-actions">
+            <a class="button secondary-button link-button" href="/profile">Profile settings</a>
             <button class="button secondary-button" id="refresh-button" type="button">Refresh</button>
             <button class="button secondary-button" id="logout-button" type="button">Logout</button>
           </div>
         </aside>
-
-        <p class="form-message" id="admin-status" role="status" aria-live="polite"></p>
-
-        <div class="inbox-topline">
-          <div>
-            <p class="eyebrow">Inbox</p>
-            <h2>Latest messages</h2>
-          </div>
-          <button class="button secondary-button compact-button" id="compose-jump-button" type="button">Write</button>
-        </div>
-
-        <div class="message-list" id="message-list"></div>
-
-        <form class="compose-panel" id="account-message-form" novalidate>
-          <div class="compose-heading">
-            <div>
-              <p class="eyebrow">Send</p>
-              <h2>Quick message</h2>
-            </div>
-          </div>
-
-          <div class="stack">
-            <label class="field-label" for="account-recipient">Send to</label>
-            <select class="text-input select-input" id="account-recipient" name="recipientUsername" required>
-              <option value="">Loading inboxes...</option>
-            </select>
-
-            <label class="field-label" for="account-message">Message</label>
-            <textarea
-              class="textarea compact-textarea"
-              id="account-message"
-              name="message"
-              maxlength="500"
-              rows="5"
-            ></textarea>
-
-            <label class="field-label" for="account-gallery-image">Photo</label>
-            <div class="photo-actions">
-              <input
-                class="visually-hidden"
-                id="account-gallery-image"
-                type="file"
-                accept="image/*"
-              >
-              <label class="photo-action" for="account-gallery-image">Choose photo</label>
-              <input
-                class="visually-hidden"
-                id="account-camera-image"
-                type="file"
-                accept="image/*"
-                capture="environment"
-              >
-              <label class="photo-action primary-photo-action" for="account-camera-image">Click photo</label>
-              <button class="clear-file-button" id="clear-account-image" type="button">Clear</button>
-            </div>
-            <p class="file-hint" id="account-image-name">Optional photo or camera capture, up to 3 MB.</p>
-
-            <div class="form-row">
-              <p class="form-message" id="account-message-status" role="status" aria-live="polite"></p>
-              <p class="counter"><span id="account-character-count">0</span>/500</p>
-            </div>
-
-            <button class="button primary-button" id="account-send-button" type="submit">Send message</button>
-          </div>
-        </form>
       </section>
     </main>
 
+    <template id="chat-template">
+      <button class="chat-item" type="button">
+        <span class="sender-avatar chat-avatar" aria-hidden="true"></span>
+        <span class="chat-copy">
+          <span class="chat-title"></span>
+          <span class="chat-preview"></span>
+        </span>
+        <span class="chat-meta">
+          <span class="presence-dot"></span>
+          <span class="unread-badge is-hidden"></span>
+        </span>
+      </button>
+    </template>
+
     <template id="message-template">
-      <article class="message-card">
-        <div class="message-card-header">
-          <div class="message-identity">
-            <span class="sender-avatar" aria-hidden="true"></span>
-            <div>
-              <p class="message-sender"></p>
-              <time class="message-time"></time>
-            </div>
-          </div>
-          <div class="message-card-actions">
-            <span class="new-badge is-hidden">New</span>
-            <button class="delete-button" type="button">Delete</button>
-          </div>
+      <article class="message-bubble">
+        <div class="bubble-topline">
+          <span class="bubble-sender"></span>
+          <time class="message-time"></time>
         </div>
+        <button class="reply-reference is-hidden" type="button"></button>
         <p class="message-text"></p>
-        <div class="message-media is-hidden">
-          <img class="message-image" alt="Attached message photo">
+        <div class="message-media is-hidden"></div>
+        <div class="reaction-row"></div>
+        <div class="bubble-actions">
+          <button type="button" data-action="reply">Reply</button>
+          <button type="button" data-action="star">Star</button>
+          <button type="button" data-action="react">React</button>
+          <span class="read-receipt"></span>
         </div>
       </article>
     </template>
 
-    <script src="/js/admin.js?v=20260512-2" defer></script>
+    <script src="/socket.io/socket.io.js" defer></script>
+    <script src="/js/admin.js?v=20260512-3" defer></script>
   </body>
 </html>

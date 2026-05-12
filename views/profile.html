@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow">
+    <meta name="theme-color" content="#2b1b25">
+    <title>ForyoU Profile</title>
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="stylesheet" href="/css/styles.css?v=20260512-3">
+  </head>
+  <body>
+    <main class="page-shell profile-shell">
+      <section class="profile-page card" aria-labelledby="profile-title">
+        <div class="profile-topline">
+          <a class="button secondary-button compact-button link-button" href="/admin">Back</a>
+          <div>
+            <p class="eyebrow">ForyoU Settings</p>
+            <h1 id="profile-title">Your letter desk</h1>
+          </div>
+        </div>
+
+        <div class="profile-preview">
+          <span class="sender-avatar profile-avatar" id="profile-avatar">F</span>
+          <div>
+            <h2 id="profile-name">Profile</h2>
+            <p id="profile-bio" class="soft-copy">A small note about you.</p>
+          </div>
+        </div>
+
+        <form class="stack" id="avatar-form" novalidate>
+          <label class="field-label" for="avatar-input">Profile picture</label>
+          <div class="photo-actions">
+            <input class="visually-hidden" id="avatar-input" name="avatar" type="file" accept="image/*">
+            <label class="photo-action primary-photo-action" for="avatar-input">Choose picture</label>
+            <button class="button secondary-button" type="submit">Save picture</button>
+          </div>
+          <p class="form-message" id="avatar-status" role="status" aria-live="polite"></p>
+        </form>
+
+        <form class="stack" id="profile-form" novalidate>
+          <label class="field-label" for="display-name">Display name</label>
+          <input class="text-input" id="display-name" name="displayName" maxlength="60" required>
+
+          <label class="field-label" for="profile-bio-input">Bio</label>
+          <textarea class="textarea compact-textarea" id="profile-bio-input" name="bio" maxlength="240" rows="4"></textarea>
+
+          <label class="field-label" for="profile-email">Email</label>
+          <input class="text-input" id="profile-email" name="email" type="email" autocomplete="email">
+
+          <label class="toggle-row" for="profile-anonymous-mode">
+            <input id="profile-anonymous-mode" name="anonymousMode" type="checkbox">
+            <span>
+              <strong>Anonymous Mode</strong>
+              <small>Hide online, typing, and read receipts.</small>
+            </span>
+            <span class="toggle-track" aria-hidden="true"></span>
+          </label>
+
+          <div class="theme-grid">
+            <label>
+              <span class="field-label">Theme</span>
+              <select class="text-input select-input" id="profile-theme" name="theme">
+                <option value="vintage-dark">Vintage dark</option>
+                <option value="letter-light">Letter light</option>
+                <option value="midnight-rose">Midnight rose</option>
+              </select>
+            </label>
+            <label>
+              <span class="field-label">Font</span>
+              <select class="text-input select-input" id="profile-font" name="fontStyle">
+                <option value="serif">Classic serif</option>
+                <option value="clean">Clean modern</option>
+                <option value="mono">Typewriter</option>
+              </select>
+            </label>
+            <label>
+              <span class="field-label">Wallpaper</span>
+              <select class="text-input select-input" id="profile-wallpaper" name="wallpaper">
+                <option value="paper">Soft paper</option>
+                <option value="plain">Plain calm</option>
+                <option value="rose">Rose dusk</option>
+              </select>
+            </label>
+            <label>
+              <span class="field-label">Color</span>
+              <select class="text-input select-input" id="profile-color" name="themeColor">
+                <option value="rose">Rose</option>
+                <option value="gold">Gold</option>
+                <option value="sage">Sage</option>
+              </select>
+            </label>
+          </div>
+
+          <p class="form-message" id="profile-status" role="status" aria-live="polite"></p>
+          <button class="button primary-button" type="submit">Save profile</button>
+        </form>
+
+        <form class="stack" id="account-profile-form" novalidate>
+          <label class="field-label" for="account-username">Username</label>
+          <input class="text-input" id="account-username" name="username" minlength="3" maxlength="32" autocomplete="username" required>
+          <p class="file-hint">Used for login. Letters, numbers, dot, dash, underscore.</p>
+          <p class="form-message" id="username-status" role="status" aria-live="polite"></p>
+          <button class="button secondary-button" type="submit">Change username</button>
+        </form>
+
+        <form class="stack" id="account-password-form" novalidate>
+          <label class="field-label" for="account-new-password">New password</label>
+          <input class="text-input" id="account-new-password" name="password" type="password" minlength="4" maxlength="128" autocomplete="new-password" required>
+          <p class="form-message" id="password-status" role="status" aria-live="polite"></p>
+          <button class="button secondary-button" type="submit">Change password</button>
+        </form>
+      </section>
+    </main>
+
+    <script src="/js/profile.js?v=20260512-3" defer></script>
+  </body>
+</html>

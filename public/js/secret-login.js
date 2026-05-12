@@ -48,3 +48,9 @@ form.addEventListener("submit", async (event) => {
     button.disabled = false;
   }
 });
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  });
+}
