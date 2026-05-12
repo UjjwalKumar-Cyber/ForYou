@@ -353,9 +353,21 @@ function pruneActiveUsers(now = Date.now()) {
   }
 }
 
-function isUserActive(username) {
+function isUltimateAdmin(viewer) {
+  const viewerUsername = normalizeUsername(viewer && viewer.username);
+  const configuredAdminUsername = normalizeUsername(process.env.ADMIN_USERNAME || "admin");
+
+  return Boolean(
+    viewer &&
+      (viewer.role === "ultimate_admin" ||
+        (configuredAdminUsername && viewerUsername === configuredAdminUsername))
+  );
+}
+
+function isUserActive(username, options = {}) {
   const now = Date.now();
   const normalizedUsername = normalizeUsername(username);
+  const includeAnonymous = Boolean(options.includeAnonymous);
   pruneActiveUsers(now);
 
   if (!normalizedUsername) {
@@ -365,9 +377,13 @@ function isUserActive(username) {
   const record = activeUsers.get(normalizedUsername);
   return Boolean(
     record &&
-      !record.anonymousMode &&
+      (includeAnonymous || !record.anonymousMode) &&
       (record.socketCount > 0 || now - record.lastActiveAt <= ACTIVE_WINDOW_MS)
   );
+}
+
+function isUserActuallyActive(username, user = {}) {
+  return Boolean(isUserActive(username, { includeAnonymous: true }) || user.isOnline || user.is_online);
 }
 
 function markUserActive(user) {
@@ -380,6 +396,8 @@ function markUserActive(user) {
   const existing = activeUsers.get(username) || {};
 
   activeUsers.set(username, {
+    username,
+    role: user.role || "user",
     anonymousMode: Boolean(user.anonymousMode || user.hideActiveStatus),
     lastActiveAt: Date.now(),
     socketCount: Number(existing.socketCount || 0)
@@ -394,12 +412,16 @@ function updateSocketPresence(user, delta) {
   }
 
   const existing = activeUsers.get(username) || {
+    username,
+    role: user.role || "user",
     anonymousMode: Boolean(user.anonymousMode || user.hideActiveStatus),
     lastActiveAt: Date.now(),
     socketCount: 0
   };
 
   activeUsers.set(username, {
+    username,
+    role: user.role || existing.role || "user",
     anonymousMode: Boolean(user.anonymousMode || user.hideActiveStatus),
     lastActiveAt: Date.now(),
     socketCount: Math.max(0, Number(existing.socketCount || 0) + delta)
@@ -592,16 +614,16 @@ function publicAccount(user) {
     wallpaper: user.wallpaper || "paper",
     fontStyle: user.fontStyle || "serif",
     themeColor: user.themeColor || "rose",
-    isActive:
-  user.role === "ultimate_admin"
-    ? isUserActive(username)
-    : !anonymousMode && isUserActive(username)
+    isOnline: Boolean(user.isOnline || user.is_online),
+    lastSeen: user.lastSeen || user.last_seen || null,
+    isActive: !anonymousMode && isUserActive(username)
   };
 }
 
 
-function publicRecipient(user) {
+function publicRecipient(user, viewer = null) {
   const account = publicAccount(user);
+  const realActive = isUserActuallyActive(account.username, user);
 
   return {
     username: account.username,
@@ -612,7 +634,7 @@ function publicRecipient(user) {
     hasProfileImage: account.hasProfileImage,
     profileImageUrl: account.profileImageUrl,
     anonymousMode: account.anonymousMode,
-    isActive: account.isActive
+    isActive: isUltimateAdmin(viewer) ? realActive : account.isActive
   };
 }
 
@@ -656,8 +678,17 @@ function userRoom(username) {
 
 async function emitPresenceUpdate() {
   try {
-    const users = (await getCachedUsers()).map(publicRecipient);
-    io.emit("presence:update", { users });
+    const users = await getCachedUsers();
+    const publicUsers = users.map((user) => publicRecipient(user));
+    io.emit("presence:update", { users: publicUsers });
+
+    for (const [username, record] of activeUsers.entries()) {
+      if (record.socketCount > 0 && isUltimateAdmin(record)) {
+        io.to(userRoom(username)).emit("presence:update", {
+          users: users.map((user) => publicRecipient(user, record))
+        });
+      }
+    }
   } catch (error) {
     console.error("Could not emit presence update.", error);
   }
@@ -774,6 +805,9 @@ app.post("/api/login", loginLimiter, async (req, res, next) => {
       markUserActive(account);
       account.isActive = true;
       req.session.accountUser = account;
+      await updateUserOnlineStatus(account.username, true);
+      invalidateUserCache();
+      schedulePresenceUpdate();
       return res.json({
         ok: true,
         user: req.session.accountUser,
@@ -873,7 +907,8 @@ app.post("/api/message", requireMessageAccess, messageLimiter, handleMessageUplo
 app.get("/api/recipients", requireMessageAccess, async (req, res, next) => {
   try {
     noStore(res);
-    const recipients = (await getCachedUsers()).map(publicRecipient);
+    const viewer = req.session.accountUser || null;
+    const recipients = (await getCachedUsers()).map((user) => publicRecipient(user, viewer));
     return res.json({ recipients });
   } catch (error) {
     return next(error);
@@ -1082,15 +1117,9 @@ app.post("/api/logout", async (req, res, next) => {
 
   if (username) {
     activeUsers.delete(username);
-  
-    await pool.query(
-      `
-        UPDATE inbox_users
-        SET is_online = false
-        WHERE username = $1
-      `,
-      [username]
-    );
+    await updateUserOnlineStatus(username, false);
+    invalidateUserCache();
+    schedulePresenceUpdate();
   }
   req.session.destroy((error) => {
     if (error) {
@@ -1110,7 +1139,9 @@ app.get("/api/chats", requireAccount, async (req, res, next) => {
       listChatSummaries(req.session.accountUser.username, { limit: 80 }),
       getCachedUsers()
     ]);
-    const userMap = new Map(users.map((user) => [user.username, publicRecipient(user)]));
+    const userMap = new Map(
+      users.map((user) => [user.username, publicRecipient(user, req.session.accountUser)])
+    );
     const conversations = summaries.map((summary) => ({
       ...summary,
       peer:
@@ -1236,7 +1267,7 @@ app.get("/api/active-friends", requireAccount, async (req, res, next) => {
     noStore(res);
     const current = normalizeUsername(req.session.accountUser.username);
     const users = (await getCachedUsers())
-      .map(publicRecipient)
+      .map((user) => publicRecipient(user, req.session.accountUser))
       .filter((user) => user.username !== current && user.isActive);
     return res.json({ users });
   } catch (error) {

@@ -71,6 +71,7 @@ function hasProfileImage(user) {
 function parseSeedUsers() {
   const users = builtInUsers.map((user) => ({
     ...user,
+    role: user.role || "user",
     seedType: "built-in"
   }));
   const adminPassword = process.env.ADMIN_PASSWORD;
@@ -80,6 +81,7 @@ function parseSeedUsers() {
       username: normalizeUsername(process.env.ADMIN_USERNAME || "admin"),
       displayName: String(process.env.ADMIN_DISPLAY_NAME || process.env.ADMIN_USERNAME || "Admin").trim(),
       password: adminPassword,
+      role: "ultimate_admin",
       seedType: "admin"
     });
   }
@@ -97,6 +99,7 @@ function parseSeedUsers() {
         username,
         displayName: displayName || username,
         password,
+        role: "user",
         seedType: "configured"
       });
     }
@@ -211,6 +214,7 @@ function normalizeUser(user) {
   return {
     username: normalizeUsername(user.username),
     displayName: user.displayName || user.display_name || user.username,
+    role: user.role || "user",
     passwordHash: user.passwordHash || user.password_hash || "",
     bio: user.bio || "",
     email: user.email || "",
@@ -224,6 +228,8 @@ function normalizeUser(user) {
     wallpaper: user.wallpaper || "paper",
     fontStyle: user.fontStyle || user.font_style || "serif",
     themeColor: user.themeColor || user.theme_color || "rose",
+    isOnline: Boolean(user.isOnline || user.is_online),
+    lastSeen: user.lastSeen || user.last_seen || null,
     passwordChangedAt: user.passwordChangedAt || user.password_changed_at || null,
     createdAt: user.createdAt || user.created_at || new Date().toISOString()
   };
@@ -266,7 +272,10 @@ async function setupPostgresStore() {
     ADD COLUMN IF NOT EXISTS wallpaper TEXT NOT NULL DEFAULT 'paper',
     ADD COLUMN IF NOT EXISTS font_style TEXT NOT NULL DEFAULT 'serif',
     ADD COLUMN IF NOT EXISTS theme_color TEXT NOT NULL DEFAULT 'rose',
-    ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMPTZ
+    ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user',
+    ADD COLUMN IF NOT EXISTS is_online BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ
   `);
 
   await pool.query(`
@@ -407,20 +416,20 @@ async function seedUsers() {
 
       const conflictAction =
         user.seedType === "admin"
-          ? "DO UPDATE SET display_name = EXCLUDED.display_name, password_hash = EXCLUDED.password_hash"
+          ? "DO UPDATE SET display_name = EXCLUDED.display_name, password_hash = EXCLUDED.password_hash, role = EXCLUDED.role"
           : `
-              DO UPDATE SET display_name = EXCLUDED.display_name, password_hash = EXCLUDED.password_hash
+              DO UPDATE SET display_name = EXCLUDED.display_name, password_hash = EXCLUDED.password_hash, role = EXCLUDED.role
               WHERE inbox_users.password_changed_at IS NULL
             `;
 
       await pool.query(
         `
-          INSERT INTO inbox_users (username, display_name, password_hash)
-          VALUES ($1, $2, $3)
+          INSERT INTO inbox_users (username, display_name, password_hash, role)
+          VALUES ($1, $2, $3, $4)
           ON CONFLICT (username)
           ${conflictAction}
         `,
-        [user.username, user.displayName, passwordHash]
+        [user.username, user.displayName, passwordHash, user.role || "user"]
       );
     }
     return;
@@ -434,6 +443,7 @@ async function seedUsers() {
       const nextUser = {
         username: user.username,
         displayName: user.displayName,
+        role: user.role || "user",
         passwordHash: user.passwordHash || hashPassword(user.password),
         createdAt: new Date().toISOString()
       };
@@ -443,6 +453,7 @@ async function seedUsers() {
         (user.seedType === "admin" || (!existingUser.passwordChangedAt && user.seedType !== "admin"))
       ) {
         existingUser.displayName = nextUser.displayName;
+        existingUser.role = nextUser.role;
         existingUser.passwordHash = nextUser.passwordHash;
       } else if (!existingUser) {
         store.users.push(nextUser);
@@ -463,11 +474,14 @@ async function listUsers(options = {}) {
       SELECT
         username,
         display_name AS "displayName",
+        role,
         bio,
         profile_image_mime AS "profileImageMime",
         profile_image_name AS "profileImageName",
         (profile_image_mime <> '') AS "hasProfileImage",
         anonymous_mode AS "anonymousMode",
+        is_online AS "isOnline",
+        last_seen AS "lastSeen",
         created_at AS "createdAt"
       FROM inbox_users
       ORDER BY display_name ASC, username ASC
@@ -498,12 +512,15 @@ async function findUser(username, options = {}) {
   await initStore();
 
   if (usePostgres) {
-    const profileImageDataSelect = "";
+    const profileImageDataSelect = includeProfileImageData
+      ? `profile_image_data AS "profileImageData",`
+      : "";
     const result = await pool.query(
       `
         SELECT
           username,
           display_name AS "displayName",
+          role,
           password_hash AS "passwordHash",
           bio,
           email,
@@ -516,7 +533,9 @@ async function findUser(username, options = {}) {
           theme,
           wallpaper,
           font_style AS "fontStyle",
-          theme_color AS "themeColor"
+          theme_color AS "themeColor",
+          is_online AS "isOnline",
+          last_seen AS "lastSeen"
         FROM inbox_users
         WHERE username = $1
       `,
@@ -553,6 +572,7 @@ async function authenticateUser(username, password) {
     username: user.username,
     displayName: user.displayName,
     bio: user.bio,
+    role: user.role,
     email: user.email,
     emailVerified: user.emailVerified,
     profileImageMime: user.profileImageMime,
@@ -562,7 +582,9 @@ async function authenticateUser(username, password) {
     theme: user.theme,
     wallpaper: user.wallpaper,
     fontStyle: user.fontStyle,
-    themeColor: user.themeColor
+    themeColor: user.themeColor,
+    isOnline: user.isOnline,
+    lastSeen: user.lastSeen
   };
 }
 
@@ -733,6 +755,7 @@ async function updateUserSettings(username, settings = {}) {
         RETURNING
           username,
           display_name AS "displayName",
+          role,
           password_hash AS "passwordHash",
           bio,
           email,
@@ -744,7 +767,9 @@ async function updateUserSettings(username, settings = {}) {
           theme,
           wallpaper,
           font_style AS "fontStyle",
-          theme_color AS "themeColor"
+          theme_color AS "themeColor",
+          is_online AS "isOnline",
+          last_seen AS "lastSeen"
       `,
       [
         nextSettings.displayName,
@@ -805,6 +830,7 @@ async function updateUserAvatar(username, avatar = null) {
         RETURNING
           username,
           display_name AS "displayName",
+          role,
           password_hash AS "passwordHash",
           bio,
           email,
@@ -816,7 +842,9 @@ async function updateUserAvatar(username, avatar = null) {
           theme,
           wallpaper,
           font_style AS "fontStyle",
-          theme_color AS "themeColor"
+          theme_color AS "themeColor",
+          is_online AS "isOnline",
+          last_seen AS "lastSeen"
       `,
       [image.data || "", image.mime || "", image.name || "", normalizedUsername]
     );
