@@ -579,6 +579,7 @@ function publicAccount(user) {
   return {
     username,
     displayName: user.displayName || user.username,
+    role: user.role || "user",
     bio: user.bio || "",
     email: user.email || "",
     emailVerified: Boolean(user.emailVerified),
