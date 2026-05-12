@@ -15,6 +15,7 @@ const { Server } = require("socket.io");
 
 const {
   addMessage,
+  updateUserOnlineStatus,
   authenticateUser,
   cleanupExpiredMessages,
   deleteMessage,
@@ -894,16 +895,9 @@ app.get("/api/session", async (req, res, next) => {
 
   try {
     if (req.session.accountUser && req.session.accountUser.username) {
-      console.log("SESSION TRACKING:", req.session.accountUser?.username);
-      await pool.query(
-        `
-          UPDATE inbox_users
-          SET
-            is_online = true,
-            last_seen = NOW()
-          WHERE username = $1
-        `,
-        [req.session.accountUser.username]
+      await updateUserOnlineStatus(
+        req.session.accountUser.username,
+        true
       );
     }
 

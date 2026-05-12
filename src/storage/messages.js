@@ -1613,7 +1613,28 @@ async function deleteMessage(id, username) {
     return true;
   });
 }
+async function updateUserOnlineStatus(username, isOnline) {
+  const normalizedUsername = normalizeUsername(username);
 
+  if (!normalizedUsername || !usePostgres) {
+    return false;
+  }
+
+  await initStore();
+
+  const result = await pool.query(
+    `
+      UPDATE inbox_users
+      SET
+        is_online = $1,
+        last_seen = NOW()
+      WHERE username = $2
+    `,
+    [Boolean(isOnline), normalizedUsername]
+  );
+
+  return result.rowCount > 0;
+}
 module.exports = {
   addMessage,
   authenticateUser,
@@ -1636,5 +1657,6 @@ module.exports = {
   updateUserAvatar,
   updateUserPassword,
   updateUserProfile,
+  updateUserOnlineStatus,
   updateUserSettings
 };
