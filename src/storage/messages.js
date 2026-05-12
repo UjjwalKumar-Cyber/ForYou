@@ -1369,13 +1369,13 @@ async function listStarredMessages(username) {
 }
 
 async function deleteMessage(id, username) {
-  const recipientUsername = normalizeUsername(username);
+  const owner = normalizeUsername(username);
 
   if (usePostgres) {
     await initStore();
     const result = await pool.query(
-      "DELETE FROM messages WHERE id = $1 AND recipient_username = $2",
-      [id, recipientUsername]
+      "DELETE FROM messages WHERE id = $1 AND (recipient_username = $2 OR sender_username = $2)",
+      [id, owner]
     );
     return result.rowCount > 0;
   }
@@ -1383,7 +1383,7 @@ async function deleteMessage(id, username) {
   return queuedWrite(async () => {
     const store = await readJsonStore();
     const nextMessages = store.messages.filter(
-      (message) => !(message.id === id && message.recipientUsername === recipientUsername)
+      (message) => !(message.id === id && (message.recipientUsername === owner || message.senderUsername === owner))
     );
 
     if (nextMessages.length === store.messages.length) {

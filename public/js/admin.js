@@ -42,6 +42,17 @@ const letterAlerts = document.querySelector("#letter-alerts");
 const peerAvatar = document.querySelector("#peer-avatar");
 const peerName = document.querySelector("#peer-name");
 const peerStatus = document.querySelector("#peer-status");
+const backChatButton = document.querySelector("#back-chat-button");
+const viewProfileButton = document.querySelector("#view-profile-button");
+const peerProfilePanel = document.querySelector("#peer-profile-panel");
+const peerProfileBackdrop = document.querySelector("#peer-profile-backdrop");
+const peerProfileClose = document.querySelector("#peer-profile-close");
+const peerProfileTitle = document.querySelector("#peer-profile-title");
+const peerProfileAvatar = document.querySelector("#peer-profile-avatar");
+const peerProfileName = document.querySelector("#peer-profile-name");
+const peerProfileStatus = document.querySelector("#peer-profile-status");
+const peerProfileUsername = document.querySelector("#peer-profile-username");
+const peerProfileBio = document.querySelector("#peer-profile-bio");
 
 const ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
 const REFRESH_MS = 20000;
@@ -51,7 +62,7 @@ let currentUser = null;
 let conversations = [];
 let recipients = [];
 let activeUsers = [];
-let currentPeer = "__letters__";
+let currentPeer = "";
 let currentMessages = [];
 let refreshTimer = null;
 let socket = null;
@@ -104,6 +115,12 @@ function closeDrawer() {
   menuButton.setAttribute("aria-expanded", "false");
 }
 
+function closePeerProfile() {
+  peerProfilePanel.classList.add("is-hidden");
+  peerProfileBackdrop.classList.add("is-hidden");
+  peerProfilePanel.setAttribute("aria-hidden", "true");
+}
+
 function showMessagesPanel() {
   loginPanel.classList.add("is-hidden");
   messagesPanel.classList.remove("is-hidden");
@@ -126,6 +143,29 @@ function formatDate(isoDate) {
     dateStyle: "medium",
     timeStyle: "short"
   }).format(new Date(isoDate));
+}
+
+function formatChatTime(isoDate) {
+  if (!isoDate) {
+    return "";
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit"
+  }).format(new Date(isoDate));
+}
+
+function makeEmptyState(text) {
+  const empty = document.createElement("div");
+  empty.className = "empty-state";
+  empty.textContent = text;
+  return empty;
+}
+
+function setConversationOpen(open) {
+  messagesPanel.classList.toggle("has-open-chat", Boolean(open));
+  messagesPanel.classList.toggle("has-no-chat", !open);
 }
 
 function updateAccountHeader() {
@@ -160,6 +200,41 @@ function conversationDisplay(conversation) {
   };
 }
 
+function currentPeerProfile() {
+  if (!currentPeer || currentPeer === "__letters__") {
+    return null;
+  }
+
+  const conversation = conversations.find((item) => item.peerUsername === currentPeer);
+  return conversation ? conversationDisplay(conversation) : getRecipient(currentPeer);
+}
+
+function openPeerProfile() {
+  const peer = currentPeerProfile();
+
+  if (!peer) {
+    return;
+  }
+
+  const name = peer.displayName || peer.username;
+  peerProfileTitle.textContent = name;
+  peerProfileName.textContent = name;
+  peerProfileUsername.textContent = `@${peer.username}`;
+  peerProfileBio.textContent = peer.bio || "No bio yet.";
+  peerProfileStatus.textContent = peer.isActive ? "Active now" : "";
+  peerProfileAvatar.textContent = userInitial(name);
+  peerProfileAvatar.style.backgroundImage = "";
+
+  if (peer.profileImageData) {
+    peerProfileAvatar.style.backgroundImage = `url(${peer.profileImageData})`;
+    peerProfileAvatar.textContent = "";
+  }
+
+  peerProfilePanel.classList.remove("is-hidden");
+  peerProfileBackdrop.classList.remove("is-hidden");
+  peerProfilePanel.setAttribute("aria-hidden", "false");
+}
+
 function messagePreview(message) {
   if (!message) {
     return "No letters yet";
@@ -179,11 +254,27 @@ function messagePreview(message) {
   return "Message";
 }
 
+function chatPreview(conversation, peer) {
+  if (!conversation.lastMessage) {
+    return peer.username === "__letters__" ? "Secret page notes will appear here" : "Tap to start chatting";
+  }
+
+  const sender =
+    conversation.lastMessage.senderUsername === currentUser.username
+      ? "You"
+      : conversation.lastMessage.senderName || peer.displayName || peer.username || "Someone";
+
+  return `${sender}: ${messagePreview(conversation.lastMessage)}`;
+}
+
 function renderActiveFriends() {
   const visible = activeUsers.filter((user) => user.username !== currentUser.username).slice(0, 8);
 
   if (!visible.length) {
-    activeFriends.innerHTML = '<span class="file-hint">No active friends right now.</span>';
+    const hint = document.createElement("span");
+    hint.className = "file-hint";
+    hint.textContent = "No active friends right now.";
+    activeFriends.replaceChildren(hint);
     return;
   }
 
@@ -227,13 +318,24 @@ function ensureConversationForRecipients() {
 function renderChatList() {
   ensureConversationForRecipients();
   const query = chatSearch.value.trim().toLowerCase();
-  const ordered = [...conversations].filter((conversation) => {
-    const peer = conversationDisplay(conversation);
-    return !query || `${peer.displayName} ${messagePreview(conversation.lastMessage)}`.toLowerCase().includes(query);
-  });
+  const ordered = [...conversations]
+    .sort((a, b) => {
+      if (a.unreadCount !== b.unreadCount) {
+        return b.unreadCount - a.unreadCount;
+      }
+
+      return (
+        new Date(b.lastMessage && b.lastMessage.createdAt ? b.lastMessage.createdAt : 0) -
+        new Date(a.lastMessage && a.lastMessage.createdAt ? a.lastMessage.createdAt : 0)
+      );
+    })
+    .filter((conversation) => {
+      const peer = conversationDisplay(conversation);
+      return !query || `${peer.displayName} ${chatPreview(conversation, peer)}`.toLowerCase().includes(query);
+    });
 
   if (!ordered.length) {
-    chatList.innerHTML = '<div class="empty-state">No chats yet.</div>';
+    chatList.replaceChildren(makeEmptyState("No chats yet."));
     return;
   }
 
@@ -245,19 +347,19 @@ function renderChatList() {
     const preview = node.querySelector(".chat-preview");
     const dot = node.querySelector(".presence-dot");
     const unread = node.querySelector(".unread-badge");
+    const time = node.querySelector(".chat-time");
 
     node.dataset.peer = conversation.peerUsername;
     node.classList.toggle("is-selected", conversation.peerUsername === currentPeer);
+    node.classList.toggle("has-unread", conversation.unreadCount > 0);
     avatar.textContent = userInitial(peer.displayName);
     if (peer.profileImageData) {
       avatar.style.backgroundImage = `url(${peer.profileImageData})`;
       avatar.textContent = "";
     }
     title.textContent = peer.displayName || peer.username;
-    preview.textContent =
-      conversation.peerUsername === "__letters__"
-        ? "Anonymous letters and surprise notes"
-        : messagePreview(conversation.lastMessage);
+    preview.textContent = chatPreview(conversation, peer);
+    time.textContent = formatChatTime(conversation.lastMessage && conversation.lastMessage.createdAt);
     dot.classList.toggle("is-active", Boolean(peer.isActive));
 
     if (conversation.unreadCount > 0) {
@@ -273,6 +375,20 @@ function renderChatList() {
 }
 
 function updatePeerHeader() {
+  if (!currentPeer) {
+    setConversationOpen(false);
+    peerName.textContent = "Choose a chat";
+    peerStatus.textContent = "Tap a name or new text to open message history.";
+    peerAvatar.textContent = "F";
+    peerAvatar.style.backgroundImage = "";
+    starredButton.disabled = true;
+    messageSearch.disabled = true;
+    accountMessageForm.classList.add("is-hidden");
+    viewProfileButton.disabled = true;
+    return;
+  }
+
+  setConversationOpen(true);
   const conversation = conversations.find((item) => item.peerUsername === currentPeer);
   const peer = conversation ? conversationDisplay(conversation) : getRecipient(currentPeer);
   const name = peer ? peer.displayName || peer.username : "Choose a chat";
@@ -287,14 +403,18 @@ function updatePeerHeader() {
   }
 
   if (currentPeer === "__letters__") {
-    peerStatus.textContent = "Anonymous letters from your private page";
+    peerStatus.textContent = "";
     starredButton.disabled = false;
+    viewProfileButton.disabled = true;
+    messageSearch.disabled = false;
     accountMessageForm.classList.add("is-hidden");
     return;
   }
 
-  peerStatus.textContent = peer && peer.isActive ? "Active now" : "Quiet for now";
+  peerStatus.textContent = peer && peer.isActive ? "Active now" : "";
   starredButton.disabled = false;
+  viewProfileButton.disabled = false;
+  messageSearch.disabled = false;
   accountMessageForm.classList.remove("is-hidden");
   accountRecipient.value = currentPeer;
 }
@@ -364,7 +484,7 @@ function renderMessages(messages) {
   currentMessages = messages;
 
   if (!messages.length) {
-    messageList.innerHTML = '<div class="empty-state">No messages here yet.</div>';
+    messageList.replaceChildren(makeEmptyState("No messages here yet."));
     return;
   }
 
@@ -403,6 +523,7 @@ function renderMessages(messages) {
     node.querySelector('[data-action="reply"]').addEventListener("click", () => startReply(message));
     node.querySelector('[data-action="star"]').addEventListener("click", () => toggleStar(message.id));
     node.querySelector('[data-action="react"]').addEventListener("click", () => toggleReaction(message.id, "❤️"));
+    node.querySelector('[data-action="delete"]').addEventListener("click", () => deleteMessage(message.id));
 
     const receipt = node.querySelector(".read-receipt");
     if (isMine && message.readAt && !currentUser.anonymousMode) {
@@ -459,12 +580,12 @@ async function loadChats() {
 
   conversations = result.conversations || [];
 
-  if (!currentPeer && conversations.length) {
-    currentPeer = conversations[0].peerUsername;
-  }
-
-  if (!conversations.some((conversation) => conversation.peerUsername === currentPeer)) {
-    currentPeer = conversations[0] ? conversations[0].peerUsername : "__letters__";
+  if (
+    currentPeer &&
+    !conversations.some((conversation) => conversation.peerUsername === currentPeer) &&
+    !recipients.some((recipient) => recipient.username === currentPeer)
+  ) {
+    currentPeer = "";
   }
 }
 
@@ -479,6 +600,12 @@ async function loadActiveFriends() {
 }
 
 async function loadMessages(options = {}) {
+  if (!currentPeer) {
+    updatePeerHeader();
+    messageList.replaceChildren(makeEmptyState("Tap a name or new text to open the full chat history."));
+    return;
+  }
+
   const query = messageSearch.value.trim();
   const response = await fetch(`/api/chats/${encodeURIComponent(currentPeer)}/messages?q=${encodeURIComponent(query)}`, {
     cache: "no-store"
@@ -505,9 +632,13 @@ async function loadAll() {
     await loadChats();
     await loadActiveFriends();
     renderChatList();
-    await loadMessages({ skipRead: true });
-    showLetterAlerts();
-    setStatus("Live and synced.", "success");
+    if (currentPeer) {
+      await loadMessages({ skipRead: true });
+    } else {
+      updatePeerHeader();
+      messageList.replaceChildren(makeEmptyState("Tap a name or new text to open the full chat history."));
+    }
+    setStatus("Synced.");
   } catch (error) {
     setStatus(error.message || "Could not load inbox.", "error");
   }
@@ -516,9 +647,19 @@ async function loadAll() {
 async function selectConversation(peerUsername) {
   currentPeer = peerUsername;
   accountRecipient.value = peerUsername;
+  messageSearch.value = "";
   renderChatList();
   clearReply();
   await loadMessages();
+}
+
+function closeConversation() {
+  currentPeer = "";
+  typingStatus.textContent = "";
+  clearReply();
+  renderChatList();
+  updatePeerHeader();
+  messageList.replaceChildren(makeEmptyState("Tap a name or new text to open the full chat history."));
 }
 
 async function markRead() {
@@ -530,22 +671,7 @@ async function markRead() {
 }
 
 function showLetterAlerts() {
-  const unread = conversations.filter((conversation) => conversation.unreadCount > 0).slice(0, 3);
   letterAlerts.replaceChildren();
-
-  for (const conversation of unread) {
-    const peer = conversationDisplay(conversation);
-    const alert = document.createElement("button");
-    const title = document.createElement("strong");
-    const preview = document.createElement("span");
-    alert.className = "letter-alert";
-    alert.type = "button";
-    title.textContent = peer.displayName || peer.username;
-    preview.textContent = messagePreview(conversation.lastMessage).slice(0, 90);
-    alert.append(title, preview);
-    alert.addEventListener("click", () => selectConversation(conversation.peerUsername));
-    letterAlerts.append(alert);
-  }
 }
 
 function connectSocket() {
@@ -635,17 +761,7 @@ function upsertConversationFromMessage(message) {
 }
 
 function showSoftAlert(message) {
-  const alert = document.createElement("button");
-  const title = document.createElement("strong");
-  const preview = document.createElement("span");
-  alert.className = "letter-alert";
-  alert.type = "button";
-  title.textContent = message.senderName || "Someone";
-  preview.textContent = messagePreview(message).slice(0, 90);
-  alert.append(title, preview);
-  alert.addEventListener("click", () => selectConversation(message.senderUsername || "__letters__"));
-  letterAlerts.prepend(alert);
-  window.setTimeout(() => alert.remove(), 9000);
+  setStatus(`New text from ${message.senderName || "Someone"}.`);
 }
 
 function startReply(message) {
@@ -763,6 +879,23 @@ async function toggleReaction(id, emoji) {
   });
   const result = await response.json();
   if (response.ok) updateMessageInView(result.message);
+}
+
+async function deleteMessage(id) {
+  const response = await fetch(`/api/messages/${encodeURIComponent(id)}`, {
+    method: "DELETE"
+  });
+  const result = await response.json();
+
+  if (!response.ok) {
+    setComposerStatus(result.error || "Could not delete message.", "error");
+    return;
+  }
+
+  currentMessages = currentMessages.filter((message) => message.id !== id);
+  renderMessages(currentMessages);
+  setComposerStatus("Message deleted.", "success");
+  await loadAll();
 }
 
 async function toggleAnonymousMode() {
@@ -892,6 +1025,10 @@ loginForm.addEventListener("submit", async (event) => {
 });
 
 refreshButton.addEventListener("click", loadAll);
+backChatButton.addEventListener("click", closeConversation);
+viewProfileButton.addEventListener("click", openPeerProfile);
+peerProfileClose.addEventListener("click", closePeerProfile);
+peerProfileBackdrop.addEventListener("click", closePeerProfile);
 menuButton.addEventListener("click", openDrawer);
 closeMenuButton.addEventListener("click", closeDrawer);
 drawerBackdrop.addEventListener("click", closeDrawer);
@@ -938,7 +1075,10 @@ logoutButton.addEventListener("click", async () => {
   }
 });
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") closeDrawer();
+  if (event.key === "Escape") {
+    closeDrawer();
+    closePeerProfile();
+  }
 });
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden && currentUser) loadAll();

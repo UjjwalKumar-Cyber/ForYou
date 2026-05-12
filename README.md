@@ -55,8 +55,11 @@ foryou/
 - Voice notes, images, videos, PDFs, and text file sharing
 - Message highlights for new incoming messages
 - Active friends strip with online indicators
+- Simple inbox-first chat layout with full history after tapping a sender
+- Sender profile view with photo, username, active status, and bio
 - Anonymous Mode to hide active status, typing, and read receipts
 - Starred messages that stay saved
+- Delete option inside each message history
 - Normal messages auto-expire after 24 hours unless starred
 - Profile settings for display name, username, password, profile photo, bio, email, theme, wallpaper, font, and color
 - Mobile-first nostalgic letter UI with dark, light, and midnight themes

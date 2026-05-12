@@ -7,7 +7,7 @@
     <meta name="theme-color" content="#2b1b25">
     <title>ForyoU Letters</title>
     <link rel="manifest" href="/manifest.webmanifest">
-    <link rel="stylesheet" href="/css/styles.css?v=20260512-3">
+    <link rel="stylesheet" href="/css/styles.css?v=20260512-5">
   </head>
   <body>
     <main class="page-shell admin-shell">
@@ -45,18 +45,21 @@
             </button>
           </div>
 
+          <p class="drawer-label sidebar-label">Active now</p>
           <div class="active-strip" id="active-friends" aria-label="Active friends"></div>
 
           <div class="search-wrap">
             <input class="text-input compact-input" id="chat-search" type="search" placeholder="Search chats">
           </div>
 
+          <p class="drawer-label sidebar-label">New texts</p>
           <div class="chat-list" id="chat-list"></div>
           <p class="form-message" id="admin-status" role="status" aria-live="polite"></p>
         </aside>
 
         <section class="conversation-panel" aria-label="Conversation">
           <header class="conversation-header">
+            <button class="back-chat-button" id="back-chat-button" type="button">Back</button>
             <div class="message-identity">
               <span class="sender-avatar large-avatar" id="peer-avatar" aria-hidden="true">F</span>
               <div>
@@ -65,11 +68,12 @@
               </div>
             </div>
             <div class="conversation-actions">
+              <button class="button secondary-button compact-button" id="view-profile-button" type="button">View profile</button>
               <button class="button secondary-button compact-button" id="starred-button" type="button">Starred</button>
             </div>
           </header>
 
-          <div class="letter-alerts" id="letter-alerts"></div>
+          <div class="letter-alerts is-hidden" id="letter-alerts"></div>
 
           <div class="conversation-tools">
             <input class="text-input compact-input" id="message-search" type="search" placeholder="Search this conversation">
@@ -82,21 +86,24 @@
             <button class="close-button" id="cancel-reply-button" type="button">Cancel</button>
           </div>
 
-          <form class="composer" id="account-message-form" novalidate>
+          <form class="composer whatsapp-composer" id="account-message-form" novalidate>
             <input type="hidden" id="account-recipient" name="recipientUsername">
             <input type="hidden" id="reply-to-id" name="replyToId">
-            <textarea class="textarea compact-textarea" id="account-message" name="message" maxlength="500" rows="3" placeholder="Write like a letter..."></textarea>
 
-            <div class="composer-actions">
-              <label class="photo-action" for="account-gallery-image">Choose photo</label>
-              <input class="visually-hidden" id="account-gallery-image" type="file" accept="image/*,video/*,audio/*,.pdf,.txt">
+            <div class="composer-input-row">
+              <div class="composer-tools" aria-label="Attachments">
+                <label class="composer-tool" for="account-gallery-image" title="Choose photo, video, audio, PDF, or note">File</label>
+                <label class="composer-tool" for="account-camera-image" title="Click photo">Photo</label>
+                <button class="composer-tool" id="record-audio-button" type="button" title="Record voice note">Voice</button>
+                <button class="composer-tool" id="clear-account-image" type="button" title="Clear selected media">Clear</button>
+              </div>
 
-              <label class="photo-action primary-photo-action" for="account-camera-image">Click photo</label>
-              <input class="visually-hidden" id="account-camera-image" type="file" accept="image/*" capture="environment">
+              <textarea class="textarea compact-textarea chat-textarea" id="account-message" name="message" maxlength="500" rows="1" placeholder="Message"></textarea>
 
-              <button class="clear-file-button" id="record-audio-button" type="button">Voice note</button>
-              <button class="clear-file-button" id="clear-account-image" type="button">Clear</button>
               <button class="button primary-button send-button" id="account-send-button" type="submit">Send</button>
+
+              <input class="visually-hidden" id="account-gallery-image" type="file" accept="image/*,video/*,audio/*,.pdf,.txt">
+              <input class="visually-hidden" id="account-camera-image" type="file" accept="image/*" capture="environment">
             </div>
 
             <div class="form-row">
@@ -109,6 +116,28 @@
         </section>
 
         <div class="drawer-backdrop is-hidden" id="drawer-backdrop"></div>
+        <div class="drawer-backdrop is-hidden" id="peer-profile-backdrop"></div>
+        <aside class="peer-profile-panel is-hidden" id="peer-profile-panel" aria-hidden="true">
+          <div class="drawer-topline">
+            <div>
+              <p class="eyebrow">Sender profile</p>
+              <h2 id="peer-profile-title">Profile</h2>
+            </div>
+            <button class="close-button" id="peer-profile-close" type="button" aria-label="Close sender profile">Close</button>
+          </div>
+          <div class="profile-preview peer-profile-preview">
+            <span class="sender-avatar profile-avatar" id="peer-profile-avatar">F</span>
+            <div>
+              <h3 id="peer-profile-name">Name</h3>
+              <p class="presence-line" id="peer-profile-status"></p>
+              <p class="file-hint" id="peer-profile-username"></p>
+            </div>
+          </div>
+          <div class="drawer-section">
+            <p class="drawer-label">Bio</p>
+            <p class="peer-bio" id="peer-profile-bio">No bio yet.</p>
+          </div>
+        </aside>
         <aside class="account-drawer is-hidden" id="account-drawer" aria-hidden="true">
           <div class="drawer-topline">
             <div>
@@ -152,6 +181,7 @@
           <span class="chat-preview"></span>
         </span>
         <span class="chat-meta">
+          <span class="chat-time"></span>
           <span class="presence-dot"></span>
           <span class="unread-badge is-hidden"></span>
         </span>
@@ -172,12 +202,13 @@
           <button type="button" data-action="reply">Reply</button>
           <button type="button" data-action="star">Star</button>
           <button type="button" data-action="react">React</button>
+          <button type="button" data-action="delete">Delete</button>
           <span class="read-receipt"></span>
         </div>
       </article>
     </template>
 
     <script src="/socket.io/socket.io.js" defer></script>
-    <script src="/js/admin.js?v=20260512-3" defer></script>
+    <script src="/js/admin.js?v=20260512-5" defer></script>
   </body>
 </html>
