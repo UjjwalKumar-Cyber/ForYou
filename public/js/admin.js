@@ -102,6 +102,23 @@ function updateCounter() {
   accountCharacterCount.parentElement.dataset.warning = count > 450 ? "true" : "false";
 }
 
+// UX polish: resize the composer on the next frame so typing feels smooth without layout thrash.
+function resizeChatTextarea() {
+  window.requestAnimationFrame(() => {
+    accountMessage.style.height = "auto";
+    accountMessage.style.height = `${Math.min(accountMessage.scrollHeight, 120)}px`;
+  });
+}
+
+function scrollMessagesToBottom() {
+  window.requestAnimationFrame(() => {
+    messageList.scrollTo({
+      top: messageList.scrollHeight,
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth"
+    });
+  });
+}
+
 function openDrawer() {
   accountDrawer.classList.remove("is-hidden");
   drawerBackdrop.classList.remove("is-hidden");
@@ -377,6 +394,8 @@ function renderChatList() {
   });
 
   chatList.replaceChildren(...nodes);
+  // Keep the freshest chats visually anchored near the heading after list refreshes.
+  chatList.scrollTop = 0;
 }
 
 function updatePeerHeader() {
@@ -533,7 +552,7 @@ function renderMessages(messages) {
   }
 
   messageList.replaceChildren(fragment);
-  messageList.scrollTop = messageList.scrollHeight;
+  scrollMessagesToBottom();
 }
 
 async function loadSession() {
@@ -871,6 +890,7 @@ async function sendMessage(event) {
     pendingAudioBlob = null;
     clearReply();
     updateCounter();
+    resizeChatTextarea();
     updateAttachmentName();
     setComposerStatus("Sent.", "success");
     upsertConversationFromMessage(result.item);
@@ -1057,6 +1077,7 @@ drawerBackdrop.addEventListener("click", closeDrawer);
 anonymousModeToggle.addEventListener("change", toggleAnonymousMode);
 accountMessage.addEventListener("input", () => {
   updateCounter();
+  resizeChatTextarea();
   emitTyping();
 });
 accountMessageForm.addEventListener("submit", sendMessage);
@@ -1116,5 +1137,6 @@ if ("serviceWorker" in navigator) {
 }
 
 updateCounter();
+resizeChatTextarea();
 updateAttachmentName();
 loadSession();

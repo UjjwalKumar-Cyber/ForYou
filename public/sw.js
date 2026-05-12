@@ -1,10 +1,10 @@
-const CACHE_NAME = "foryou-static-v6";
+const CACHE_NAME = "foryou-static-v8";
 const STATIC_ASSETS = [
-  "/css/styles.css?v=20260512-6",
-  "/js/admin.js?v=20260512-6",
-  "/js/message.js?v=20260512-6",
-  "/js/profile.js?v=20260512-6",
-  "/js/secret-login.js?v=20260512-6",
+  "/css/styles.css?v=20260512-8",
+  "/js/admin.js?v=20260512-8",
+  "/js/message.js?v=20260512-8",
+  "/js/profile.js?v=20260512-8",
+  "/js/secret-login.js?v=20260512-8",
   "/assets/seal.svg",
   "/manifest.webmanifest"
 ];
@@ -51,15 +51,14 @@ self.addEventListener("fetch", (event) => {
 
   event.respondWith(
     caches.match(request).then((cached) => {
-      if (cached) {
-        return cached;
-      }
-
-      return fetch(request).then((response) => {
+      // Performance polish: show cached static assets immediately, then refresh the cache in the background.
+      const refresh = fetch(request).then((response) => {
         const copy = response.clone();
         caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
         return response;
-      });
+      }).catch(() => cached || Response.error());
+
+      return cached || refresh;
     })
   );
 });

@@ -7,13 +7,14 @@
     <meta name="theme-color" content="#2b1b25">
     <title>ForyoU Secret Note</title>
     <link rel="manifest" href="/manifest.webmanifest">
-    <link rel="stylesheet" href="/css/styles.css?v=20260512-6">
+    <link rel="preload" href="/assets/seal.svg" as="image" type="image/svg+xml">
+    <link rel="stylesheet" href="/css/styles.css?v=20260512-8">
   </head>
   <body>
     <main class="page-shell message-shell">
       <section class="card note-card" aria-labelledby="message-title">
         <div class="card-topline">
-          <img class="mini-seal" src="/assets/seal.svg" alt="" width="44" height="44">
+          <img class="mini-seal" src="/assets/seal.svg" alt="" width="44" height="44" decoding="async">
           <p class="eyebrow">ForyoU</p>
         </div>
 
@@ -77,6 +78,6 @@
       </section>
     </main>
 
-    <script src="/js/message.js?v=20260512-6" defer></script>
+    <script src="/js/message.js?v=20260512-8" defer></script>
   </body>
 </html>

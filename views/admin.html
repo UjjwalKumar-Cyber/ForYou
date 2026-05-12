@@ -7,12 +7,13 @@
     <meta name="theme-color" content="#2b1b25">
     <title>ForyoU Letters</title>
     <link rel="manifest" href="/manifest.webmanifest">
-    <link rel="stylesheet" href="/css/styles.css?v=20260512-6">
+    <link rel="preload" href="/assets/seal.svg" as="image" type="image/svg+xml">
+    <link rel="stylesheet" href="/css/styles.css?v=20260512-8">
   </head>
   <body>
     <main class="page-shell admin-shell">
       <section class="card admin-login-card is-hidden" id="admin-login-panel" aria-labelledby="admin-login-title">
-        <img class="seal" src="/assets/seal.svg" alt="" width="76" height="76">
+        <img class="seal" src="/assets/seal.svg" alt="" width="76" height="76" decoding="async">
         <p class="eyebrow">ForyoU Letters</p>
         <h1 id="admin-login-title">Open your private desk.</h1>
         <p class="soft-copy">A quiet place for chats, letters, voice notes, and the words people keep.</p>
@@ -209,6 +210,6 @@
     </template>
 
     <script src="/socket.io/socket.io.js" defer></script>
-    <script src="/js/admin.js?v=20260512-6" defer></script>
+    <script src="/js/admin.js?v=20260512-8" defer></script>
   </body>
 </html>
