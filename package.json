@@ -12,6 +12,7 @@
     "node": ">=18.18.0"
   },
   "dependencies": {
+    "compression": "^1.8.1",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "express-rate-limit": "^7.5.0",
@@ -20,6 +21,7 @@
     "multer": "^2.1.1",
     "pg": "^8.20.0",
     "sanitize-html": "^2.14.0",
+    "sharp": "^0.34.5",
     "socket.io": "^4.8.3"
   }
 }

@@ -3,12 +3,14 @@ require("dotenv").config();
 const crypto = require("crypto");
 const http = require("http");
 const path = require("path");
+const compression = require("compression");
 const express = require("express");
 const rateLimit = require("express-rate-limit");
 const session = require("express-session");
 const helmet = require("helmet");
 const multer = require("multer");
 const sanitizeHtml = require("sanitize-html");
+const sharp = require("sharp");
 const { Server } = require("socket.io");
 
 const {
@@ -18,6 +20,7 @@ const {
   deleteMessage,
   findUser,
   findAccessibleMessage,
+  getUserAvatar,
   initStore,
   listChatSummaries,
   listConversationMessages,
@@ -38,7 +41,10 @@ const {
 const app = express();
 const httpServer = http.createServer(app);
 const io = new Server(httpServer, {
-  serveClient: true
+  serveClient: true,
+  perMessageDeflate: {
+    threshold: 1024
+  }
 });
 
 const PORT = Number(process.env.PORT || 3000);
@@ -47,6 +53,9 @@ const isProduction = process.env.NODE_ENV === "production";
 const ACTIVE_WINDOW_MS = 1000 * 60 * 2;
 const ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
 const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
+const USER_LIST_CACHE_MS = 5000;
+const USER_LIST_LIMIT = 200;
+const MESSAGE_PAGE_LIMIT = 80;
 const allowedImageTypes = new Set([
   "image/gif",
   "image/heic",
@@ -138,6 +147,11 @@ const SESSION_SECRET = requiredSecret(
 process.env.ADMIN_PASSWORD = ADMIN_PASSWORD;
 
 const activeUsers = new Map();
+let userListCache = {
+  expiresAt: 0,
+  users: null
+};
+let presenceUpdateTimer = null;
 
 const cspDirectives = {
   defaultSrc: ["'self'"],
@@ -176,6 +190,12 @@ app.use((req, res, next) => {
   res.set("X-Robots-Tag", "noindex, nofollow, noarchive");
   next();
 });
+
+app.use(
+  compression({
+    threshold: 1024
+  })
+);
 
 app.use(express.json({ limit: "12kb" }));
 app.use(express.urlencoded({ extended: false, limit: "12kb" }));
@@ -229,7 +249,17 @@ const messageLimiter = rateLimit({
 app.use(
   express.static(path.join(__dirname, "public"), {
     etag: true,
-    maxAge: 0
+    maxAge: isProduction ? "7d" : 0,
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith("sw.js")) {
+        res.set("Cache-Control", "no-cache");
+        return;
+      }
+
+      if (isProduction && /\.(?:css|js|svg|webmanifest)$/i.test(filePath)) {
+        res.set("Cache-Control", "public, max-age=604800, immutable");
+      }
+    }
   })
 );
 
@@ -414,18 +444,66 @@ function attachmentKindForMime(mime) {
   return "file";
 }
 
-function buildAttachmentPayload(file) {
+async function optimizeImageFile(file, options = {}) {
+  const mime = getImageMime(file);
+
+  if (!mime || mime === "image/gif" || mime === "image/heic" || mime === "image/heif") {
+    return file;
+  }
+
+  try {
+    const maxSize = options.avatar ? 320 : 1600;
+    let pipeline = sharp(file.buffer, { animated: false })
+      .rotate()
+      .resize({
+        width: maxSize,
+        height: maxSize,
+        fit: "inside",
+        withoutEnlargement: true
+      });
+    let outputMime = mime;
+
+    if (mime === "image/jpeg") {
+      pipeline = pipeline.jpeg({ quality: options.avatar ? 76 : 82, mozjpeg: true });
+    } else if (mime === "image/png") {
+      pipeline = pipeline.png({ compressionLevel: 9, effort: 8 });
+    } else if (mime === "image/webp") {
+      pipeline = pipeline.webp({ quality: options.avatar ? 76 : 82, effort: 4 });
+    } else {
+      return file;
+    }
+
+    const buffer = await pipeline.toBuffer();
+
+    if (!buffer.length || buffer.length >= file.buffer.length) {
+      return file;
+    }
+
+    return {
+      ...file,
+      buffer,
+      mimetype: outputMime,
+      size: buffer.length
+    };
+  } catch (error) {
+    console.warn("Image optimization skipped.", error.message);
+    return file;
+  }
+}
+
+async function buildAttachmentPayload(file, options = {}) {
   if (!file) {
     return null;
   }
 
-  const mime = getAttachmentMime(file) || "application/octet-stream";
+  const optimizedFile = getImageMime(file) ? await optimizeImageFile(file, options) : file;
+  const mime = getAttachmentMime(optimizedFile) || "application/octet-stream";
 
   return {
-    data: `data:${mime};base64,${file.buffer.toString("base64")}`,
+    data: `data:${mime};base64,${optimizedFile.buffer.toString("base64")}`,
     mime,
-    name: cleanFileName(file.originalname),
-    size: file.size,
+    name: cleanFileName(optimizedFile.originalname),
+    size: optimizedFile.size,
     kind: attachmentKindForMime(mime)
   };
 }
@@ -493,6 +571,9 @@ function handleAvatarUpload(req, res, next) {
 function publicAccount(user) {
   const username = normalizeUsername(user.username);
   const anonymousMode = Boolean(user.anonymousMode || user.hideActiveStatus);
+  const hasImage = Boolean(
+    user.hasProfileImage || user.profileImageData || user.profileImageMime || user.profileImageName
+  );
 
   return {
     username,
@@ -500,8 +581,10 @@ function publicAccount(user) {
     bio: user.bio || "",
     email: user.email || "",
     emailVerified: Boolean(user.emailVerified),
-    profileImageData: user.profileImageData || "",
     profileImageMime: user.profileImageMime || "",
+    profileImageName: user.profileImageName || "",
+    hasProfileImage: hasImage,
+    profileImageUrl: hasImage ? `/api/users/${encodeURIComponent(username)}/avatar` : "",
     anonymousMode,
     theme: user.theme || "vintage-dark",
     wallpaper: user.wallpaper || "paper",
@@ -518,11 +601,47 @@ function publicRecipient(user) {
     username: account.username,
     displayName: account.displayName,
     bio: account.bio,
-    profileImageData: account.profileImageData,
     profileImageMime: account.profileImageMime,
+    profileImageName: account.profileImageName,
+    hasProfileImage: account.hasProfileImage,
+    profileImageUrl: account.profileImageUrl,
     anonymousMode: account.anonymousMode,
     isActive: account.isActive
   };
+}
+
+function invalidateUserCache() {
+  userListCache = {
+    expiresAt: 0,
+    users: null
+  };
+}
+
+async function getCachedUsers() {
+  const now = Date.now();
+
+  if (userListCache.users && userListCache.expiresAt > now) {
+    return userListCache.users;
+  }
+
+  const users = await listUsers({ limit: USER_LIST_LIMIT });
+  userListCache = {
+    expiresAt: now + USER_LIST_CACHE_MS,
+    users
+  };
+  return users;
+}
+
+function sendDataUrlImage(res, avatar) {
+  const match = String(avatar.data || "").match(/^data:([^;]+);base64,(.+)$/);
+
+  if (!match) {
+    return res.status(404).json({ error: "Profile image not found." });
+  }
+
+  res.set("Cache-Control", "private, max-age=300");
+  res.type(avatar.mime || match[1] || "image/jpeg");
+  return res.send(Buffer.from(match[2], "base64"));
 }
 
 function userRoom(username) {
@@ -531,11 +650,22 @@ function userRoom(username) {
 
 async function emitPresenceUpdate() {
   try {
-    const users = (await listUsers()).map(publicRecipient);
+    const users = (await getCachedUsers()).map(publicRecipient);
     io.emit("presence:update", { users });
   } catch (error) {
     console.error("Could not emit presence update.", error);
   }
+}
+
+function schedulePresenceUpdate() {
+  if (presenceUpdateTimer) {
+    return;
+  }
+
+  presenceUpdateTimer = setTimeout(() => {
+    presenceUpdateTimer = null;
+    emitPresenceUpdate();
+  }, 250);
 }
 
 function emitConversationUpdate(senderUsername, recipientUsername, message) {
@@ -569,7 +699,7 @@ io.on("connection", (socket) => {
   const account = socket.accountUser;
   socket.join(userRoom(account.username));
   updateSocketPresence(account, 1);
-  emitPresenceUpdate();
+  schedulePresenceUpdate();
 
   socket.on("chat:typing", async ({ recipientUsername, typing }) => {
     try {
@@ -591,7 +721,7 @@ io.on("connection", (socket) => {
 
   socket.on("disconnect", () => {
     updateSocketPresence(account, -1);
-    emitPresenceUpdate();
+    schedulePresenceUpdate();
   });
 });
 
@@ -666,7 +796,7 @@ app.post("/api/message", requireMessageAccess, messageLimiter, handleMessageUplo
 
     const accountUser = req.session.accountUser || null;
     const text = cleanMessage(req.body.message);
-    const attachment = buildAttachmentPayload(pickUploadedFile(req));
+    const attachment = await buildAttachmentPayload(pickUploadedFile(req));
     const senderName = accountUser
       ? cleanSenderName(accountUser.displayName || accountUser.username)
       : cleanSenderName(req.body.senderName);
@@ -737,8 +867,23 @@ app.post("/api/message", requireMessageAccess, messageLimiter, handleMessageUplo
 app.get("/api/recipients", requireMessageAccess, async (req, res, next) => {
   try {
     noStore(res);
-    const recipients = (await listUsers()).map(publicRecipient);
+    const recipients = (await getCachedUsers()).map(publicRecipient);
     return res.json({ recipients });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get("/api/users/:username/avatar", requireAccount, async (req, res, next) => {
+  try {
+    const avatar = await getUserAvatar(req.params.username);
+
+    if (!avatar) {
+      noStore(res);
+      return res.status(404).json({ error: "Profile image not found." });
+    }
+
+    return sendDataUrlImage(res, avatar);
   } catch (error) {
     return next(error);
   }
@@ -770,7 +915,8 @@ async function saveAnonymousMode(req, res, next) {
 
     req.session.accountUser = publicAccount(updated);
     markUserActive(req.session.accountUser);
-    emitPresenceUpdate();
+    invalidateUserCache();
+    schedulePresenceUpdate();
 
     return res.json({
       ok: true,
@@ -825,6 +971,9 @@ app.patch("/api/account/profile", requireAccount, async (req, res, next) => {
       markUserActive(req.session.accountUser);
     }
 
+    invalidateUserCache();
+    schedulePresenceUpdate();
+
     return res.json({
       ok: true,
       user: publicAccount(req.session.accountUser)
@@ -860,7 +1009,8 @@ app.patch("/api/profile", requireAccount, async (req, res, next) => {
 
     req.session.accountUser = publicAccount(updated);
     markUserActive(req.session.accountUser);
-    emitPresenceUpdate();
+    invalidateUserCache();
+    schedulePresenceUpdate();
     return res.json({ ok: true, user: publicAccount(req.session.accountUser) });
   } catch (error) {
     return next(error);
@@ -871,7 +1021,7 @@ app.post("/api/profile/avatar", requireAccount, handleAvatarUpload, async (req, 
   noStore(res);
 
   try {
-    const avatar = req.file ? buildAttachmentPayload(req.file) : null;
+    const avatar = req.file ? await buildAttachmentPayload(req.file, { avatar: true }) : null;
     const updated = await updateUserAvatar(req.session.accountUser.username, avatar);
 
     if (!updated) {
@@ -879,7 +1029,8 @@ app.post("/api/profile/avatar", requireAccount, handleAvatarUpload, async (req, 
     }
 
     req.session.accountUser = publicAccount(updated);
-    emitPresenceUpdate();
+    invalidateUserCache();
+    schedulePresenceUpdate();
     return res.json({ ok: true, user: publicAccount(req.session.accountUser) });
   } catch (error) {
     return next(error);
@@ -930,8 +1081,8 @@ app.get("/api/chats", requireAccount, async (req, res, next) => {
   try {
     noStore(res);
     const [summaries, users] = await Promise.all([
-      listChatSummaries(req.session.accountUser.username),
-      listUsers()
+      listChatSummaries(req.session.accountUser.username, { limit: 80 }),
+      getCachedUsers()
     ]);
     const userMap = new Map(users.map((user) => [user.username, publicRecipient(user)]));
     const conversations = summaries.map((summary) => ({
@@ -964,10 +1115,15 @@ app.get("/api/chats/:peer/messages", requireAccount, async (req, res, next) => {
     noStore(res);
     const peer = normalizeUsername(req.params.peer);
     const query = String(req.query.q || "");
+    const options = {
+      query,
+      limit: req.query.limit || MESSAGE_PAGE_LIMIT,
+      before: req.query.before || ""
+    };
     const messages =
       req.params.peer === "__letters__"
-        ? await listLetterMessages(req.session.accountUser.username, query)
-        : await listConversationMessages(req.session.accountUser.username, peer, query);
+        ? await listLetterMessages(req.session.accountUser.username, options)
+        : await listConversationMessages(req.session.accountUser.username, peer, options);
 
     return res.json({ messages });
   } catch (error) {
@@ -1004,7 +1160,7 @@ app.post("/api/chats/:peer/read", requireAccount, async (req, res, next) => {
 app.get("/api/messages/starred", requireAccount, async (req, res, next) => {
   try {
     noStore(res);
-    const messages = await listStarredMessages(req.session.accountUser.username);
+    const messages = await listStarredMessages(req.session.accountUser.username, { limit: req.query.limit || 120 });
     return res.json({ messages });
   } catch (error) {
     return next(error);
@@ -1053,7 +1209,7 @@ app.get("/api/active-friends", requireAccount, async (req, res, next) => {
   try {
     noStore(res);
     const current = normalizeUsername(req.session.accountUser.username);
-    const users = (await listUsers())
+    const users = (await getCachedUsers())
       .map(publicRecipient)
       .filter((user) => user.username !== current && user.isActive);
     return res.json({ users });
@@ -1065,7 +1221,7 @@ app.get("/api/active-friends", requireAccount, async (req, res, next) => {
 app.get("/api/messages", requireAccount, async (req, res, next) => {
   try {
     noStore(res);
-    const messages = await listMessagesForUser(req.session.accountUser.username);
+    const messages = await listMessagesForUser(req.session.accountUser.username, { limit: req.query.limit || 150 });
     return res.json({ messages });
   } catch (error) {
     return next(error);

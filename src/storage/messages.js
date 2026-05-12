@@ -29,6 +29,10 @@ let initPromise;
 if (usePostgres) {
   pool = new Pool({
     connectionString: process.env.DATABASE_URL,
+    max: Number(process.env.PG_POOL_MAX || 10),
+    idleTimeoutMillis: Number(process.env.PG_IDLE_TIMEOUT_MS || 30000),
+    connectionTimeoutMillis: Number(process.env.PG_CONNECTION_TIMEOUT_MS || 5000),
+    maxUses: Number(process.env.PG_POOL_MAX_USES || 7500),
     ssl:
       process.env.PGSSLMODE === "disable" || !process.env.DATABASE_URL.includes("render.com")
         ? false
@@ -41,6 +45,27 @@ function normalizeUsername(username) {
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9_.-]/g, "");
+}
+
+function clampLimit(value, fallback = 80, max = 200) {
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+
+  return Math.min(Math.floor(parsed), max);
+}
+
+function hasProfileImage(user) {
+  return Boolean(
+    user.profileImageData ||
+      user.profile_image_data ||
+      user.profileImageMime ||
+      user.profile_image_mime ||
+      user.profileImageName ||
+      user.profile_image_name
+  );
 }
 
 function parseSeedUsers() {
@@ -193,6 +218,7 @@ function normalizeUser(user) {
     profileImageData: user.profileImageData || user.profile_image_data || "",
     profileImageMime: user.profileImageMime || user.profile_image_mime || "",
     profileImageName: user.profileImageName || user.profile_image_name || "",
+    hasProfileImage: Boolean(user.hasProfileImage || user.has_profile_image || hasProfileImage(user)),
     anonymousMode: Boolean(user.anonymousMode || user.anonymous_mode),
     theme: user.theme || "vintage-dark",
     wallpaper: user.wallpaper || "paper",
@@ -284,7 +310,29 @@ async function setupPostgresStore() {
     ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ
   `);
 
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_inbox_users_username ON inbox_users (username)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_inbox_users_display_name ON inbox_users (display_name)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_messages_sender_username ON messages (sender_username)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_messages_recipient_username ON messages (recipient_username)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages (created_at DESC)");
+  await pool.query(
+    "CREATE INDEX IF NOT EXISTS idx_messages_sender_recipient_created_at ON messages (sender_username, recipient_username, created_at DESC)"
+  );
+  await pool.query(
+    "CREATE INDEX IF NOT EXISTS idx_messages_recipient_sender_created_at ON messages (recipient_username, sender_username, created_at DESC)"
+  );
+  await pool.query(
+    "CREATE INDEX IF NOT EXISTS idx_messages_expiry_unstarred ON messages (expires_at) WHERE expires_at IS NOT NULL AND starred_by = '[]'"
+  );
+
   await seedUsers();
+
+  try {
+    await pool.query("VACUUM ANALYZE inbox_users");
+    await pool.query("VACUUM ANALYZE messages");
+  } catch (error) {
+    console.warn("Postgres VACUUM ANALYZE skipped.", error.message);
+  }
 }
 
 async function setupJsonStore() {
@@ -405,28 +453,28 @@ async function seedUsers() {
   });
 }
 
-async function listUsers() {
+async function listUsers(options = {}) {
   await initStore();
+  const limit = clampLimit(options.limit, 200, 500);
 
   if (usePostgres) {
-    const result = await pool.query(`
+    const result = await pool.query(
+      `
       SELECT
         username,
         display_name AS "displayName",
         bio,
-        email,
-        email_verified AS "emailVerified",
-        profile_image_data AS "profileImageData",
         profile_image_mime AS "profileImageMime",
         profile_image_name AS "profileImageName",
+        (profile_image_mime <> '') AS "hasProfileImage",
         anonymous_mode AS "anonymousMode",
-        theme,
-        wallpaper,
-        font_style AS "fontStyle",
-        theme_color AS "themeColor"
+        created_at AS "createdAt"
       FROM inbox_users
       ORDER BY display_name ASC, username ASC
-    `);
+      LIMIT $1
+    `,
+      [limit]
+    );
 
     return result.rows.map(normalizeUser);
   }
@@ -435,11 +483,13 @@ async function listUsers() {
 
   return store.users
     .map(normalizeUser)
-    .sort((a, b) => a.displayName.localeCompare(b.displayName));
+    .sort((a, b) => a.displayName.localeCompare(b.displayName))
+    .slice(0, limit);
 }
 
-async function findUser(username) {
+async function findUser(username, options = {}) {
   const normalizedUsername = normalizeUsername(username);
+  const includeProfileImageData = Boolean(options.includeProfileImageData);
 
   if (!normalizedUsername) {
     return null;
@@ -448,6 +498,7 @@ async function findUser(username) {
   await initStore();
 
   if (usePostgres) {
+    const profileImageDataSelect = "";
     const result = await pool.query(
       `
         SELECT
@@ -457,9 +508,10 @@ async function findUser(username) {
           bio,
           email,
           email_verified AS "emailVerified",
-          profile_image_data AS "profileImageData",
+          ${profileImageDataSelect}
           profile_image_mime AS "profileImageMime",
           profile_image_name AS "profileImageName",
+          (profile_image_mime <> '') AS "hasProfileImage",
           anonymous_mode AS "anonymousMode",
           theme,
           wallpaper,
@@ -481,7 +533,13 @@ async function findUser(username) {
     return null;
   }
 
-  return normalizeUser(user);
+  const normalizedUser = normalizeUser(user);
+
+  if (!includeProfileImageData) {
+    normalizedUser.profileImageData = "";
+  }
+
+  return normalizedUser;
 }
 
 async function authenticateUser(username, password) {
@@ -497,9 +555,9 @@ async function authenticateUser(username, password) {
     bio: user.bio,
     email: user.email,
     emailVerified: user.emailVerified,
-    profileImageData: user.profileImageData,
     profileImageMime: user.profileImageMime,
     profileImageName: user.profileImageName,
+    hasProfileImage: user.hasProfileImage,
     anonymousMode: user.anonymousMode,
     theme: user.theme,
     wallpaper: user.wallpaper,
@@ -679,9 +737,9 @@ async function updateUserSettings(username, settings = {}) {
           bio,
           email,
           email_verified AS "emailVerified",
-          profile_image_data AS "profileImageData",
           profile_image_mime AS "profileImageMime",
           profile_image_name AS "profileImageName",
+          (profile_image_mime <> '') AS "hasProfileImage",
           anonymous_mode AS "anonymousMode",
           theme,
           wallpaper,
@@ -751,9 +809,9 @@ async function updateUserAvatar(username, avatar = null) {
           bio,
           email,
           email_verified AS "emailVerified",
-          profile_image_data AS "profileImageData",
           profile_image_mime AS "profileImageMime",
           profile_image_name AS "profileImageName",
+          (profile_image_mime <> '') AS "hasProfileImage",
           anonymous_mode AS "anonymousMode",
           theme,
           wallpaper,
@@ -782,6 +840,61 @@ async function updateUserAvatar(username, avatar = null) {
   });
 }
 
+async function getUserAvatar(username) {
+  const normalizedUsername = normalizeUsername(username);
+
+  if (!normalizedUsername) {
+    return null;
+  }
+
+  await initStore();
+
+  if (usePostgres) {
+    const result = await pool.query(
+      `
+        SELECT
+          profile_image_data AS "profileImageData",
+          profile_image_mime AS "profileImageMime",
+          profile_image_name AS "profileImageName"
+        FROM inbox_users
+        WHERE username = $1
+      `,
+      [normalizedUsername]
+    );
+
+    const row = result.rows[0];
+
+    if (!row || !row.profileImageData) {
+      return null;
+    }
+
+    return {
+      data: row.profileImageData,
+      mime: row.profileImageMime || "image/jpeg",
+      name: row.profileImageName || "avatar"
+    };
+  }
+
+  const store = await readJsonStore();
+  const rawUser = store.users.find((item) => item.username === normalizedUsername);
+
+  if (!rawUser) {
+    return null;
+  }
+
+  const user = normalizeUser(rawUser);
+
+  if (!user || !user.profileImageData) {
+    return null;
+  }
+
+  return {
+    data: user.profileImageData,
+    mime: user.profileImageMime || "image/jpeg",
+    name: user.profileImageName || "avatar"
+  };
+}
+
 async function cleanupExpiredMessages() {
   const now = Date.now();
 
@@ -792,7 +905,7 @@ async function cleanupExpiredMessages() {
         DELETE FROM messages
         WHERE expires_at IS NOT NULL
           AND expires_at <= now()
-          AND COALESCE(starred_by, '[]') = '[]'
+          AND starred_by = '[]'
       `
     );
     return;
@@ -832,17 +945,29 @@ function filterMessagesBySearch(messages, query) {
 async function listConversationMessages(username, peerUsername, query = "") {
   const owner = normalizeUsername(username);
   const peer = normalizeUsername(peerUsername);
+  const options = typeof query === "object" && query !== null ? query : {};
+  const searchQuery = typeof query === "object" && query !== null ? options.query || "" : query;
+  const limit = clampLimit(options.limit, 80, 200);
+  const before = options.before ? new Date(options.before) : null;
   await cleanupExpiredMessages();
 
   if (usePostgres) {
     await initStore();
     const values = [owner, peer];
     let searchSql = "";
+    let beforeSql = "";
 
-    if (String(query || "").trim()) {
-      values.push(`%${String(query).trim().toLowerCase()}%`);
-      searchSql = ` AND LOWER(COALESCE(text, '') || ' ' || COALESCE(sender_name, '') || ' ' || COALESCE(attachment_name, '')) LIKE $3`;
+    if (String(searchQuery || "").trim()) {
+      values.push(`%${String(searchQuery).trim().toLowerCase()}%`);
+      searchSql = ` AND LOWER(COALESCE(text, '') || ' ' || COALESCE(sender_name, '') || ' ' || COALESCE(attachment_name, '')) LIKE $${values.length}`;
     }
+
+    if (before && !Number.isNaN(before.getTime())) {
+      values.push(before.toISOString());
+      beforeSql = ` AND created_at < $${values.length}`;
+    }
+
+    values.push(limit);
 
     const result = await pool.query(
       `
@@ -873,37 +998,56 @@ async function listConversationMessages(username, peerUsername, query = "") {
           OR (sender_username = $2 AND recipient_username = $1)
         )
         ${searchSql}
-        ORDER BY created_at ASC
+        ${beforeSql}
+        ORDER BY created_at DESC
+        LIMIT $${values.length}
       `,
       values
     );
 
-    return result.rows.map(normalizeMessage);
+    return result.rows.map(normalizeMessage).reverse();
   }
 
   const store = await readJsonStore();
-  const messages = store.messages.filter(
-    (message) =>
+  let messages = store.messages.filter((message) => {
+    const matchesConversation =
       (message.senderUsername === owner && message.recipientUsername === peer) ||
-      (message.senderUsername === peer && message.recipientUsername === owner)
-  );
+      (message.senderUsername === peer && message.recipientUsername === owner);
+    const matchesBefore = !before || Number.isNaN(before.getTime()) || new Date(message.createdAt) < before;
+    return matchesConversation && matchesBefore;
+  });
 
-  return filterMessagesBySearch(messages, query).sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+  return filterMessagesBySearch(messages, searchQuery)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    .slice(0, limit)
+    .reverse();
 }
 
 async function listLetterMessages(username, query = "") {
   const owner = normalizeUsername(username);
+  const options = typeof query === "object" && query !== null ? query : {};
+  const searchQuery = typeof query === "object" && query !== null ? options.query || "" : query;
+  const limit = clampLimit(options.limit, 80, 200);
+  const before = options.before ? new Date(options.before) : null;
   await cleanupExpiredMessages();
 
   if (usePostgres) {
     await initStore();
     const values = [owner];
     let searchSql = "";
+    let beforeSql = "";
 
-    if (String(query || "").trim()) {
-      values.push(`%${String(query).trim().toLowerCase()}%`);
-      searchSql = ` AND LOWER(COALESCE(text, '') || ' ' || COALESCE(sender_name, '') || ' ' || COALESCE(attachment_name, '')) LIKE $2`;
+    if (String(searchQuery || "").trim()) {
+      values.push(`%${String(searchQuery).trim().toLowerCase()}%`);
+      searchSql = ` AND LOWER(COALESCE(text, '') || ' ' || COALESCE(sender_name, '') || ' ' || COALESCE(attachment_name, '')) LIKE $${values.length}`;
     }
+
+    if (before && !Number.isNaN(before.getTime())) {
+      values.push(before.toISOString());
+      beforeSql = ` AND created_at < $${values.length}`;
+    }
+
+    values.push(limit);
 
     const result = await pool.query(
       `
@@ -931,30 +1075,85 @@ async function listLetterMessages(username, query = "") {
         FROM messages
         WHERE recipient_username = $1 AND COALESCE(sender_username, '') = ''
         ${searchSql}
-        ORDER BY created_at ASC
+        ${beforeSql}
+        ORDER BY created_at DESC
+        LIMIT $${values.length}
       `,
       values
     );
 
-    return result.rows.map(normalizeMessage);
+    return result.rows.map(normalizeMessage).reverse();
   }
 
   const store = await readJsonStore();
-  const messages = store.messages.filter(
-    (message) => message.recipientUsername === owner && !message.senderUsername
-  );
+  const messages = store.messages.filter((message) => {
+    const matchesBefore = !before || Number.isNaN(before.getTime()) || new Date(message.createdAt) < before;
+    return message.recipientUsername === owner && !message.senderUsername && matchesBefore;
+  });
 
-  return filterMessagesBySearch(messages, query).sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+  return filterMessagesBySearch(messages, searchQuery)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    .slice(0, limit)
+    .reverse();
 }
 
-async function listChatSummaries(username) {
+async function listChatSummaries(username, options = {}) {
   const owner = normalizeUsername(username);
+  const limit = clampLimit(options.limit, 80, 200);
   await cleanupExpiredMessages();
 
   const allMessages = usePostgres
     ? (
         await pool.query(
           `
+            WITH visible_messages AS (
+              SELECT
+                id,
+                text,
+                sender_name,
+                sender_username,
+                recipient_username,
+                kind,
+                attachment_mime,
+                attachment_name,
+                attachment_size,
+                reply_to_id,
+                reactions,
+                starred_by,
+                expires_at,
+                read_at,
+                created_at,
+                CASE
+                  WHEN COALESCE(sender_username, '') = '' AND recipient_username = $1 THEN '__letters__'
+                  WHEN sender_username = $1 THEN recipient_username
+                  ELSE sender_username
+                END AS peer_username
+              FROM messages
+              WHERE sender_username = $1 OR recipient_username = $1
+            ),
+            ranked_messages AS (
+              SELECT
+                id,
+                text,
+                sender_name,
+                sender_username,
+                recipient_username,
+                kind,
+                attachment_mime,
+                attachment_name,
+                attachment_size,
+                reply_to_id,
+                reactions,
+                starred_by,
+                expires_at,
+                read_at,
+                created_at,
+                peer_username,
+                row_number() OVER (PARTITION BY peer_username ORDER BY created_at DESC) AS row_number,
+                count(*) FILTER (WHERE recipient_username = $1 AND read_at IS NULL) OVER (PARTITION BY peer_username) AS unread_count
+              FROM visible_messages
+              WHERE peer_username <> ''
+            )
             SELECT
               id,
               text,
@@ -962,7 +1161,6 @@ async function listChatSummaries(username) {
               sender_username AS "senderUsername",
               recipient_username AS "recipientUsername",
               kind,
-              attachment_data AS "attachmentData",
               attachment_mime AS "attachmentMime",
               attachment_name AS "attachmentName",
               attachment_size AS "attachmentSize",
@@ -971,17 +1169,32 @@ async function listChatSummaries(username) {
               starred_by AS "starredBy",
               expires_at AS "expiresAt",
               read_at AS "readAt",
-              created_at AS "createdAt"
-            FROM messages
-            WHERE sender_username = $1 OR recipient_username = $1
+              created_at AS "createdAt",
+              peer_username AS "peerUsername",
+              unread_count AS "unreadCount"
+            FROM ranked_messages
+            WHERE row_number = 1
             ORDER BY created_at DESC
+            LIMIT $2
           `,
-          [owner]
+          [owner, limit]
         )
-      ).rows.map(normalizeMessage)
+      ).rows.map((row) => ({
+        ...normalizeMessage(row),
+        peerUsername: row.peerUsername,
+        unreadCount: Number(row.unreadCount || 0)
+      }))
     : (await readJsonStore()).messages
         .filter((message) => message.senderUsername === owner || message.recipientUsername === owner)
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+  if (usePostgres) {
+    return allMessages.map((message) => ({
+      peerUsername: message.peerUsername,
+      lastMessage: message,
+      unreadCount: Number(message.unreadCount || 0)
+    }));
+  }
 
   const summaries = new Map();
 
@@ -1010,11 +1223,12 @@ async function listChatSummaries(username) {
     }
   }
 
-  return Array.from(summaries.values());
+  return Array.from(summaries.values()).slice(0, limit);
 }
 
-async function listMessagesForUser(username) {
+async function listMessagesForUser(username, options = {}) {
   const recipientUsername = normalizeUsername(username);
+  const limit = clampLimit(options.limit, 100, 300);
 
   if (usePostgres) {
     await initStore();
@@ -1045,8 +1259,9 @@ async function listMessagesForUser(username) {
         FROM messages
         WHERE recipient_username = $1
         ORDER BY created_at DESC
+        LIMIT $2
       `,
-      [recipientUsername]
+      [recipientUsername, limit]
     );
 
     return result.rows.map(normalizeMessage);
@@ -1057,7 +1272,8 @@ async function listMessagesForUser(username) {
 
   return store.messages
     .filter((message) => message.recipientUsername === recipientUsername)
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    .slice(0, limit);
 }
 
 async function addMessage({
@@ -1329,8 +1545,9 @@ async function toggleMessageStar(id, username) {
   };
 }
 
-async function listStarredMessages(username) {
+async function listStarredMessages(username, options = {}) {
   const owner = normalizeUsername(username);
+  const limit = clampLimit(options.limit, 100, 300);
   await cleanupExpiredMessages();
 
   const messages = usePostgres
@@ -1357,15 +1574,16 @@ async function listStarredMessages(username) {
             FROM messages
             WHERE sender_username = $1 OR recipient_username = $1
             ORDER BY created_at DESC
+            LIMIT $2
           `,
-          [owner]
+          [owner, limit * 2]
         )
       ).rows.map(normalizeMessage)
     : (await readJsonStore()).messages.filter(
         (message) => message.senderUsername === owner || message.recipientUsername === owner
       );
 
-  return messages.filter((message) => (message.starredBy || []).includes(owner));
+  return messages.filter((message) => (message.starredBy || []).includes(owner)).slice(0, limit);
 }
 
 async function deleteMessage(id, username) {
@@ -1403,6 +1621,7 @@ module.exports = {
   deleteMessage,
   findUser,
   findAccessibleMessage,
+  getUserAvatar,
   initStore,
   listChatSummaries,
   listConversationMessages,

@@ -55,7 +55,7 @@ const peerProfileUsername = document.querySelector("#peer-profile-username");
 const peerProfileBio = document.querySelector("#peer-profile-bio");
 
 const ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
-const REFRESH_MS = 20000;
+const REFRESH_MS = 45000;
 const TYPING_IDLE_MS = 1200;
 
 let currentUser = null;
@@ -67,6 +67,7 @@ let currentMessages = [];
 let refreshTimer = null;
 let socket = null;
 let typingTimer = null;
+let messageSearchTimer = null;
 let pendingAudioBlob = null;
 let mediaRecorder = null;
 let recordingChunks = [];
@@ -185,6 +186,23 @@ function userInitial(name) {
   return String(name || "F").trim().slice(0, 1).toUpperCase();
 }
 
+function avatarUrl(user) {
+  return (user && (user.profileImageUrl || user.profileImageData)) || "";
+}
+
+function applyAvatar(element, user, fallbackName) {
+  const name = fallbackName || (user && (user.displayName || user.username)) || "F";
+  const imageUrl = avatarUrl(user);
+
+  element.textContent = userInitial(name);
+  element.style.backgroundImage = "";
+
+  if (imageUrl) {
+    element.style.backgroundImage = `url(${imageUrl})`;
+    element.textContent = "";
+  }
+}
+
 function getRecipient(username) {
   return recipients.find((user) => user.username === username) || null;
 }
@@ -223,12 +241,7 @@ function openPeerProfile() {
   peerProfileBio.textContent = peer.bio || "No bio yet.";
   peerProfileStatus.textContent = peer.isActive ? "Active now" : "";
   peerProfileAvatar.textContent = userInitial(name);
-  peerProfileAvatar.style.backgroundImage = "";
-
-  if (peer.profileImageData) {
-    peerProfileAvatar.style.backgroundImage = `url(${peer.profileImageData})`;
-    peerProfileAvatar.textContent = "";
-  }
+  applyAvatar(peerProfileAvatar, peer, name);
 
   peerProfilePanel.classList.remove("is-hidden");
   peerProfileBackdrop.classList.remove("is-hidden");
@@ -287,11 +300,7 @@ function renderActiveFriends() {
       item.type = "button";
       item.dataset.username = user.username;
       avatar.className = "sender-avatar";
-      avatar.textContent = userInitial(user.displayName);
-      if (user.profileImageData) {
-        avatar.style.backgroundImage = `url(${user.profileImageData})`;
-        avatar.textContent = "";
-      }
+      applyAvatar(avatar, user, user.displayName);
       name.textContent = user.displayName || user.username;
       item.append(avatar, name);
       item.addEventListener("click", () => selectConversation(user.username));
@@ -352,11 +361,7 @@ function renderChatList() {
     node.dataset.peer = conversation.peerUsername;
     node.classList.toggle("is-selected", conversation.peerUsername === currentPeer);
     node.classList.toggle("has-unread", conversation.unreadCount > 0);
-    avatar.textContent = userInitial(peer.displayName);
-    if (peer.profileImageData) {
-      avatar.style.backgroundImage = `url(${peer.profileImageData})`;
-      avatar.textContent = "";
-    }
+    applyAvatar(avatar, peer, peer.displayName);
     title.textContent = peer.displayName || peer.username;
     preview.textContent = chatPreview(conversation, peer);
     time.textContent = formatChatTime(conversation.lastMessage && conversation.lastMessage.createdAt);
@@ -394,13 +399,7 @@ function updatePeerHeader() {
   const name = peer ? peer.displayName || peer.username : "Choose a chat";
 
   peerName.textContent = name;
-  peerAvatar.textContent = userInitial(name);
-  peerAvatar.style.backgroundImage = "";
-
-  if (peer && peer.profileImageData) {
-    peerAvatar.style.backgroundImage = `url(${peer.profileImageData})`;
-    peerAvatar.textContent = "";
-  }
+  applyAvatar(peerAvatar, peer, name);
 
   if (currentPeer === "__letters__") {
     peerStatus.textContent = "";
@@ -857,7 +856,12 @@ async function sendMessage(event) {
     updateCounter();
     updateAttachmentName();
     setComposerStatus("Sent.", "success");
-    await loadAll();
+    upsertConversationFromMessage(result.item);
+    renderChatList();
+
+    if (currentPeer === result.item.recipientUsername) {
+      renderMessages([...currentMessages, result.item]);
+    }
   } catch {
     setComposerStatus("Network error. Please try again.", "error");
   } finally {
@@ -895,7 +899,8 @@ async function deleteMessage(id) {
   currentMessages = currentMessages.filter((message) => message.id !== id);
   renderMessages(currentMessages);
   setComposerStatus("Message deleted.", "success");
-  await loadAll();
+  await loadChats();
+  renderChatList();
 }
 
 async function toggleAnonymousMode() {
@@ -1039,7 +1044,10 @@ accountMessage.addEventListener("input", () => {
 });
 accountMessageForm.addEventListener("submit", sendMessage);
 chatSearch.addEventListener("input", renderChatList);
-messageSearch.addEventListener("input", () => loadMessages({ skipRead: true }));
+messageSearch.addEventListener("input", () => {
+  window.clearTimeout(messageSearchTimer);
+  messageSearchTimer = window.setTimeout(() => loadMessages({ skipRead: true }), 250);
+});
 cancelReplyButton.addEventListener("click", clearReply);
 recordAudioButton.addEventListener("click", toggleRecording);
 starredButton.addEventListener("click", async () => {

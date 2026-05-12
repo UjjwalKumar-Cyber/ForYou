@@ -32,6 +32,10 @@ function initial(name) {
   return String(name || "F").trim().slice(0, 1).toUpperCase();
 }
 
+function avatarUrl(user) {
+  return (user && (user.profileImageUrl || user.profileImageData)) || "";
+}
+
 function applyUser(user) {
   currentUser = user;
   profileName.textContent = user.displayName || user.username;
@@ -39,8 +43,8 @@ function applyUser(user) {
   profileAvatar.textContent = initial(user.displayName || user.username);
   profileAvatar.style.backgroundImage = "";
 
-  if (user.profileImageData) {
-    profileAvatar.style.backgroundImage = `url(${user.profileImageData})`;
+  if (avatarUrl(user)) {
+    profileAvatar.style.backgroundImage = `url(${avatarUrl(user)})`;
     profileAvatar.textContent = "";
   }
 
