@@ -889,11 +889,29 @@ app.get("/api/users/:username/avatar", requireAccount, async (req, res, next) =>
   }
 });
 
-app.get("/api/session", (req, res) => {
+app.get("/api/session", async (req, res, next) => {
   noStore(res);
-  return res.json({
-    user: req.session.accountUser ? publicAccount(req.session.accountUser) : null
-  });
+
+  try {
+    if (req.session.accountUser && req.session.accountUser.username) {
+      await pool.query(
+        `
+          UPDATE inbox_users
+          SET
+            is_online = true,
+            last_seen = NOW()
+          WHERE username = $1
+        `,
+        [req.session.accountUser.username]
+      );
+    }
+
+    return res.json({
+      user: req.session.accountUser ? publicAccount(req.session.accountUser) : null
+    });
+  } catch (error) {
+    return next(error);
+  }
 });
 
 async function saveAnonymousMode(req, res, next) {
@@ -1059,13 +1077,21 @@ app.patch("/api/account/password", requireAccount, async (req, res, next) => {
   }
 });
 
-app.post("/api/logout", (req, res, next) => {
+app.post("/api/logout", async (req, res, next) => {
   const username = normalizeUsername(req.session.accountUser && req.session.accountUser.username);
 
   if (username) {
     activeUsers.delete(username);
+  
+    await pool.query(
+      `
+        UPDATE inbox_users
+        SET is_online = false
+        WHERE username = $1
+      `,
+      [username]
+    );
   }
-
   req.session.destroy((error) => {
     if (error) {
       return next(error);
