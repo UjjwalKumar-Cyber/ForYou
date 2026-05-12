@@ -592,8 +592,10 @@ function publicAccount(user) {
     wallpaper: user.wallpaper || "paper",
     fontStyle: user.fontStyle || "serif",
     themeColor: user.themeColor || "rose",
-    isActive: !anonymousMode && isUserActive(username)
-  };
+    isActive:
+  user.role === "ultimate_admin"
+    ? isUserActive(username)
+    : !anonymousMode && isUserActive(username)
 }
 
 function publicRecipient(user) {
