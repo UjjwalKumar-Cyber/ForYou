@@ -894,6 +894,7 @@ app.get("/api/session", async (req, res, next) => {
 
   try {
     if (req.session.accountUser && req.session.accountUser.username) {
+      console.log("SESSION TRACKING:", req.session.accountUser?.username);
       await pool.query(
         `
           UPDATE inbox_users
