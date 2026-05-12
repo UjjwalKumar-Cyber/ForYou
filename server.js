@@ -596,7 +596,9 @@ function publicAccount(user) {
   user.role === "ultimate_admin"
     ? isUserActive(username)
     : !anonymousMode && isUserActive(username)
+  };
 }
+
 
 function publicRecipient(user) {
   const account = publicAccount(user);
