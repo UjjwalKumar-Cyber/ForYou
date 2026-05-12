@@ -541,9 +541,10 @@ async function loadSession() {
     const response = await fetch("/api/session", { cache: "no-store" });
     const result = await response.json();
     currentUser = result.user || null;
-    document.getElementById("admin-loading-panel")?.classList.add("is-hidden");
 
     if (!currentUser) {
+      document.getElementById("admin-loading-panel")?.classList.add("is-hidden");
+
       setTimeout(() => {
         if (!currentUser) {
           showLoginPanel();
@@ -553,15 +554,17 @@ async function loadSession() {
       return false;
     }
 
-    requestAnimationFrame(() => {
-      showMessagesPanel();
-    });
     connectSocket();
     startAutoRefresh();
     await loadAll();
+
+    showMessagesPanel();
+    document.getElementById("admin-loading-panel")?.classList.add("is-hidden");
+
     return true;
   } catch {
     document.getElementById("admin-loading-panel")?.classList.add("is-hidden");
+
     setTimeout(() => {
       if (!currentUser) {
         showLoginPanel();
