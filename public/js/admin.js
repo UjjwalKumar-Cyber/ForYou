@@ -543,7 +543,12 @@ async function loadSession() {
     currentUser = result.user || null;
 
     if (!currentUser) {
-      showLoginPanel();
+      setTimeout(() => {
+        if (!currentUser) {
+          showLoginPanel();
+        }
+      }, 1200);
+
       return false;
     }
 
@@ -553,7 +558,12 @@ async function loadSession() {
     await loadAll();
     return true;
   } catch {
-    showLoginPanel();
+    setTimeout(() => {
+      if (!currentUser) {
+        showLoginPanel();
+      }
+    }, 1200);
+
     return false;
   }
 }
