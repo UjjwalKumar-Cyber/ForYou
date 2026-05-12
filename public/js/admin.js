@@ -541,6 +541,7 @@ async function loadSession() {
     const response = await fetch("/api/session", { cache: "no-store" });
     const result = await response.json();
     currentUser = result.user || null;
+    document.getElementById("admin-loading-panel")?.classList.add("is-hidden");
 
     if (!currentUser) {
       setTimeout(() => {
@@ -552,12 +553,15 @@ async function loadSession() {
       return false;
     }
 
-    showMessagesPanel();
+    requestAnimationFrame(() => {
+      showMessagesPanel();
+    });
     connectSocket();
     startAutoRefresh();
     await loadAll();
     return true;
   } catch {
+    document.getElementById("admin-loading-panel")?.classList.add("is-hidden");
     setTimeout(() => {
       if (!currentUser) {
         showLoginPanel();
