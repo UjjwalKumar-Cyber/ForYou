@@ -198,6 +198,7 @@ function normalizeUser(user) {
     wallpaper: user.wallpaper || "paper",
     fontStyle: user.fontStyle || user.font_style || "serif",
     themeColor: user.themeColor || user.theme_color || "rose",
+    passwordChangedAt: user.passwordChangedAt || user.password_changed_at || null,
     createdAt: user.createdAt || user.created_at || new Date().toISOString()
   };
 }
@@ -238,7 +239,8 @@ async function setupPostgresStore() {
     ADD COLUMN IF NOT EXISTS theme TEXT NOT NULL DEFAULT 'vintage-dark',
     ADD COLUMN IF NOT EXISTS wallpaper TEXT NOT NULL DEFAULT 'paper',
     ADD COLUMN IF NOT EXISTS font_style TEXT NOT NULL DEFAULT 'serif',
-    ADD COLUMN IF NOT EXISTS theme_color TEXT NOT NULL DEFAULT 'rose'
+    ADD COLUMN IF NOT EXISTS theme_color TEXT NOT NULL DEFAULT 'rose',
+    ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMPTZ
   `);
 
   await pool.query(`
@@ -352,18 +354,16 @@ async function seedUsers() {
   }
 
   if (usePostgres) {
-    const countResult = await pool.query("SELECT count(*)::int AS count FROM inbox_users");
-    const hasExistingUsers = Number(countResult.rows[0] && countResult.rows[0].count) > 0;
-
-    if (hasExistingUsers) {
-      seedUsersList = seedUsersList.filter((user) => user.seedType !== "built-in");
-    }
-
     for (const user of seedUsersList) {
+      const passwordHash = user.passwordHash || hashPassword(user.password);
+
       const conflictAction =
         user.seedType === "admin"
           ? "DO UPDATE SET display_name = EXCLUDED.display_name, password_hash = EXCLUDED.password_hash"
-          : "DO NOTHING";
+          : `
+              DO UPDATE SET display_name = EXCLUDED.display_name, password_hash = EXCLUDED.password_hash
+              WHERE inbox_users.password_changed_at IS NULL
+            `;
 
       await pool.query(
         `
@@ -372,7 +372,7 @@ async function seedUsers() {
           ON CONFLICT (username)
           ${conflictAction}
         `,
-        [user.username, user.displayName, user.passwordHash || hashPassword(user.password)]
+        [user.username, user.displayName, passwordHash]
       );
     }
     return;
@@ -380,11 +380,6 @@ async function seedUsers() {
 
   await queuedWrite(async () => {
     const store = await readJsonStore(false);
-    const hasExistingUsers = store.users.length > 0;
-
-    if (hasExistingUsers) {
-      seedUsersList = seedUsersList.filter((user) => user.seedType !== "built-in");
-    }
 
     for (const user of seedUsersList) {
       const existingUser = store.users.find((item) => item.username === user.username);
@@ -395,7 +390,10 @@ async function seedUsers() {
         createdAt: new Date().toISOString()
       };
 
-      if (existingUser && user.seedType === "admin") {
+      if (
+        existingUser &&
+        (user.seedType === "admin" || (!existingUser.passwordChangedAt && user.seedType !== "admin"))
+      ) {
         existingUser.displayName = nextUser.displayName;
         existingUser.passwordHash = nextUser.passwordHash;
       } else if (!existingUser) {
@@ -619,7 +617,7 @@ async function updateUserPassword(username, password) {
   if (usePostgres) {
     await initStore();
     const result = await pool.query(
-      "UPDATE inbox_users SET password_hash = $1 WHERE username = $2",
+      "UPDATE inbox_users SET password_hash = $1, password_changed_at = now() WHERE username = $2",
       [passwordHash, normalizedUsername]
     );
 
@@ -635,6 +633,7 @@ async function updateUserPassword(username, password) {
     }
 
     user.passwordHash = passwordHash;
+    user.passwordChangedAt = new Date().toISOString();
     await writeJsonStore(store);
     return true;
   });
