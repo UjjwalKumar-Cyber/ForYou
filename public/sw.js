@@ -1,10 +1,10 @@
-const CACHE_NAME = "foryou-static-v8";
+const CACHE_NAME = "foryou-static-v9";
 const STATIC_ASSETS = [
-  "/css/styles.css?v=20260512-8",
-  "/js/admin.js?v=20260512-8",
-  "/js/message.js?v=20260512-8",
-  "/js/profile.js?v=20260512-8",
-  "/js/secret-login.js?v=20260512-8",
+  "/css/styles.css?v=20260516-analytics",
+  "/js/admin.js?v=20260516-analytics",
+  "/js/message.js?v=20260516-analytics",
+  "/js/profile.js?v=20260516-analytics",
+  "/js/secret-login.js?v=20260516-analytics",
   "/assets/seal.svg",
   "/manifest.webmanifest"
 ];

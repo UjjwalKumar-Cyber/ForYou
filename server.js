@@ -11,28 +11,39 @@ const helmet = require("helmet");
 const multer = require("multer");
 const sanitizeHtml = require("sanitize-html");
 const sharp = require("sharp");
+const { v2: cloudinary } = require("cloudinary");
 const { Server } = require("socket.io");
 
 const {
   addMessage,
-  updateUserOnlineStatus,
   authenticateUser,
+  cleanupAnalyticsLogs,
   cleanupExpiredMessages,
   deleteMessage,
+  detectSuspiciousLogin,
+  endUserSession,
   findUser,
   findAccessibleMessage,
+  getUltimateAdminMonitoring,
   getUserAvatar,
+  heartbeatUserSession,
   initStore,
+  listUserLoginHistory,
   listChatSummaries,
   listConversationMessages,
   listLetterMessages,
   listMessagesForUser,
   listStarredMessages,
   listUsers,
+  logAdminAction,
   markConversationRead,
+  markStaleUsersOffline,
   normalizeUsername,
+  recordLoginAttempt,
+  startUserSession,
   toggleMessageReaction,
   toggleMessageStar,
+  updateUserSecurityStatus,
   updateUserAvatar,
   updateUserPassword,
   updateUserProfile,
@@ -57,6 +68,11 @@ const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
 const USER_LIST_CACHE_MS = 5000;
 const USER_LIST_LIMIT = 200;
 const MESSAGE_PAGE_LIMIT = 80;
+const ADMIN_ROOM = "ultimate-admins";
+const CLOUDINARY_ENABLED = Boolean(
+  process.env.CLOUDINARY_URL ||
+    (process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET)
+);
 const allowedImageTypes = new Set([
   "image/gif",
   "image/heic",
@@ -120,6 +136,15 @@ const upload = multer({
   }
 });
 
+if (CLOUDINARY_ENABLED && !process.env.CLOUDINARY_URL) {
+  cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET,
+    secure: true
+  });
+}
+
 function requiredSecret(name, fallback) {
   const value = process.env[name];
 
@@ -153,6 +178,8 @@ let userListCache = {
   users: null
 };
 let presenceUpdateTimer = null;
+let adminMonitoringTimer = null;
+const locationCache = new Map();
 
 const cspDirectives = {
   defaultSrc: ["'self'"],
@@ -161,8 +188,8 @@ const cspDirectives = {
   fontSrc: ["'self'"],
   formAction: ["'self'"],
   frameAncestors: ["'none'"],
-  imgSrc: ["'self'", "data:"],
-  mediaSrc: ["'self'", "data:", "blob:"],
+  imgSrc: ["'self'", "data:", "https:"],
+  mediaSrc: ["'self'", "data:", "blob:", "https:"],
   objectSrc: ["'none'"],
   scriptSrc: ["'self'"],
   styleSrc: ["'self'"]
@@ -247,6 +274,17 @@ const messageLimiter = rateLimit({
   }
 });
 
+const analyticsLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 90,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  keyGenerator: sessionKey,
+  message: {
+    error: "Too many activity updates. Please wait a moment."
+  }
+});
+
 app.use(
   express.static(path.join(__dirname, "public"), {
     etag: true,
@@ -302,6 +340,15 @@ function requireAccount(req, res, next) {
   return res.status(401).json({ error: "Please log in to your inbox." });
 }
 
+function requireUltimateAdmin(req, res, next) {
+  if (req.session.accountUser && isUltimateAdmin(req.session.accountUser)) {
+    return next();
+  }
+
+  noStore(res);
+  return res.status(403).json({ error: "Ultimate admin access is required." });
+}
+
 function requireMessageAccess(req, res, next) {
   if (req.session.secretUnlocked === true || (req.session.accountUser && req.session.accountUser.username)) {
     return next();
@@ -343,6 +390,166 @@ function cleanDisplayName(input) {
 
 function isValidAccountUsername(input) {
   return /^[a-zA-Z0-9_.-]{3,32}$/.test(String(input || "").trim());
+}
+
+function getClientIp(req) {
+  const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  return forwarded || req.ip || req.socket.remoteAddress || "";
+}
+
+function isPrivateIp(ip) {
+  const value = String(ip || "").replace(/^::ffff:/, "");
+  return (
+    !value ||
+    value === "::1" ||
+    value === "127.0.0.1" ||
+    value.startsWith("10.") ||
+    value.startsWith("192.168.") ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(value)
+  );
+}
+
+function parseUserAgent(userAgent = "") {
+  const ua = String(userAgent || "");
+  const lower = ua.toLowerCase();
+  const isTablet = /ipad|tablet|android(?!.*mobile)/i.test(ua);
+  const isPhone = /iphone|mobile|android.*mobile/i.test(ua);
+  const deviceType = /iphone/i.test(ua)
+    ? "iPhone"
+    : /android/i.test(ua)
+      ? isTablet
+        ? "Tablet"
+        : "Android"
+      : isTablet
+        ? "Tablet"
+        : isPhone
+          ? "Phone"
+          : "Desktop";
+  const operatingSystem = /android/i.test(ua)
+    ? "Android"
+    : /iphone|ipad|ipod/i.test(ua)
+      ? "iOS"
+      : /windows/i.test(ua)
+        ? "Windows"
+        : /mac os|macintosh/i.test(ua)
+          ? "macOS"
+          : /linux/i.test(ua)
+            ? "Linux"
+            : "Unknown";
+  const browserMatch =
+    ua.match(/Edg\/([\d.]+)/) ||
+    ua.match(/Firefox\/([\d.]+)/) ||
+    ua.match(/Chrome\/([\d.]+)/) ||
+    ua.match(/Version\/([\d.]+).*Safari/);
+  const browser = /Edg\//.test(ua)
+    ? "Edge"
+    : /Firefox\//.test(ua)
+      ? "Firefox"
+      : /Chrome\//.test(ua)
+        ? "Chrome"
+        : /Safari\//.test(ua)
+          ? "Safari"
+          : "Unknown";
+
+  return {
+    deviceType,
+    operatingSystem,
+    browser,
+    browserVersion: browserMatch ? browserMatch[1] : "",
+    userAgent: ua || lower
+  };
+}
+
+async function lookupApproximateLocation(ip) {
+  const cleanIp = String(ip || "").replace(/^::ffff:/, "");
+
+  if (isPrivateIp(cleanIp)) {
+    return {};
+  }
+
+  const cached = locationCache.get(cleanIp);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.value;
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1200);
+    const response = await fetch(`https://ipapi.co/${encodeURIComponent(cleanIp)}/json/`, {
+      signal: controller.signal,
+      headers: { "User-Agent": "ForyoU security analytics" }
+    });
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      return {};
+    }
+
+    const data = await response.json();
+    const value = {
+      country: cleanText(data.country_name || data.country || "").slice(0, 80),
+      state: cleanText(data.region || data.region_code || "").slice(0, 120),
+      city: cleanText(data.city || "").slice(0, 120),
+      locationTimezone: cleanText(data.timezone || "").slice(0, 120),
+      isp: cleanText(data.org || "").slice(0, 180),
+      vpnProxy: typeof data.proxy === "boolean" ? data.proxy : null
+    };
+
+    locationCache.set(cleanIp, {
+      expiresAt: Date.now() + 6 * 60 * 60 * 1000,
+      value
+    });
+    return value;
+  } catch {
+    return {};
+  }
+}
+
+async function buildActivityContext(req, clientActivity = {}) {
+  const ipAddress = getClientIp(req);
+  const userAgent = req.headers["user-agent"] || "";
+  const parsed = parseUserAgent(userAgent);
+  const location = await lookupApproximateLocation(ipAddress);
+
+  return {
+    ipAddress,
+    ...location,
+    ...parsed,
+    screenWidth: clientActivity.screenWidth,
+    screenHeight: clientActivity.screenHeight,
+    devicePixelRatio: clientActivity.devicePixelRatio,
+    language: cleanText(clientActivity.language).slice(0, 80),
+    clientTimezone: cleanText(clientActivity.timezone || clientActivity.clientTimezone).slice(0, 120),
+    onlineState:
+      clientActivity.onlineState === undefined && clientActivity.isOnline === undefined
+        ? null
+        : Boolean(clientActivity.onlineState !== undefined ? clientActivity.onlineState : clientActivity.isOnline)
+  };
+}
+
+function isAccountBlocked(user) {
+  if (!user) {
+    return false;
+  }
+
+  if (user.accountStatus === "blocked") {
+    return true;
+  }
+
+  if (user.accountStatus === "suspended") {
+    const until = user.suspendedUntil ? new Date(user.suspendedUntil).getTime() : 0;
+    return !until || until > Date.now();
+  }
+
+  return false;
+}
+
+function accountBlockedMessage(user) {
+  if (user && user.accountStatus === "suspended") {
+    return "This account is temporarily suspended.";
+  }
+
+  return "This account is blocked.";
 }
 
 function pruneActiveUsers(now = Date.now()) {
@@ -521,14 +728,50 @@ async function buildAttachmentPayload(file, options = {}) {
 
   const optimizedFile = getImageMime(file) ? await optimizeImageFile(file, options) : file;
   const mime = getAttachmentMime(optimizedFile) || "application/octet-stream";
+  const storageUrl = await uploadToObjectStorage(optimizedFile, mime, options);
+
+  if (storageUrl) {
+    return {
+      data: "",
+      url: storageUrl,
+      mime,
+      name: cleanFileName(optimizedFile.originalname),
+      size: optimizedFile.size,
+      kind: attachmentKindForMime(mime)
+    };
+  }
 
   return {
     data: `data:${mime};base64,${optimizedFile.buffer.toString("base64")}`,
+    url: "",
     mime,
     name: cleanFileName(optimizedFile.originalname),
     size: optimizedFile.size,
     kind: attachmentKindForMime(mime)
   };
+}
+
+async function uploadToObjectStorage(file, mime, options = {}) {
+  if (!CLOUDINARY_ENABLED || !file || !file.buffer || !file.buffer.length) {
+    return "";
+  }
+
+  try {
+    const folder = options.avatar ? "foryou/profile-pictures" : "foryou/message-media";
+    const dataUri = `data:${mime};base64,${file.buffer.toString("base64")}`;
+    const result = await cloudinary.uploader.upload(dataUri, {
+      folder,
+      resource_type: "auto",
+      use_filename: false,
+      unique_filename: true,
+      overwrite: false
+    });
+
+    return result.secure_url || result.url || "";
+  } catch (error) {
+    console.warn("Cloudinary upload skipped; falling back to database storage.", error.message);
+    return "";
+  }
 }
 
 function pickUploadedFile(req) {
@@ -595,7 +838,11 @@ function publicAccount(user) {
   const username = normalizeUsername(user.username);
   const anonymousMode = Boolean(user.anonymousMode || user.hideActiveStatus);
   const hasImage = Boolean(
-    user.hasProfileImage || user.profileImageData || user.profileImageMime || user.profileImageName
+    user.hasProfileImage ||
+      user.profileImageData ||
+      user.profileImageUrl ||
+      user.profileImageMime ||
+      user.profileImageName
   );
 
   return {
@@ -616,6 +863,12 @@ function publicAccount(user) {
     themeColor: user.themeColor || "rose",
     isOnline: Boolean(user.isOnline || user.is_online),
     lastSeen: user.lastSeen || user.last_seen || null,
+    loginTime: user.loginTime || user.login_time || null,
+    logoutTime: user.logoutTime || user.logout_time || null,
+    sessionDurationSeconds: Number(user.sessionDurationSeconds || user.session_duration_seconds || 0),
+    accountStatus: user.accountStatus || user.account_status || "active",
+    suspendedUntil: user.suspendedUntil || user.suspended_until || null,
+    blockedReason: user.blockedReason || user.blocked_reason || "",
     isActive: !anonymousMode && isUserActive(username)
   };
 }
@@ -661,6 +914,11 @@ async function getCachedUsers() {
 }
 
 function sendDataUrlImage(res, avatar) {
+  if (avatar.url) {
+    res.set("Cache-Control", "private, max-age=300");
+    return res.redirect(302, avatar.url);
+  }
+
   const match = String(avatar.data || "").match(/^data:([^;]+);base64,(.+)$/);
 
   if (!match) {
@@ -705,6 +963,25 @@ function schedulePresenceUpdate() {
   }, 250);
 }
 
+async function emitAdminMonitoringDirty() {
+  io.to(ADMIN_ROOM).emit("admin:monitoring-dirty", {
+    generatedAt: new Date().toISOString()
+  });
+}
+
+function scheduleAdminMonitoringUpdate() {
+  if (adminMonitoringTimer) {
+    return;
+  }
+
+  adminMonitoringTimer = setTimeout(() => {
+    adminMonitoringTimer = null;
+    emitAdminMonitoringDirty().catch((error) => {
+      console.error("Could not notify admin monitoring clients.", error);
+    });
+  }, 400);
+}
+
 function emitConversationUpdate(senderUsername, recipientUsername, message) {
   io.to(userRoom(senderUsername)).emit("chat:message", { message });
   io.to(userRoom(recipientUsername)).emit("chat:message", { message });
@@ -735,8 +1012,14 @@ io.use((socket, next) => {
 io.on("connection", (socket) => {
   const account = socket.accountUser;
   socket.join(userRoom(account.username));
+
+  if (isUltimateAdmin(account)) {
+    socket.join(ADMIN_ROOM);
+  }
+
   updateSocketPresence(account, 1);
   schedulePresenceUpdate();
+  scheduleAdminMonitoringUpdate();
 
   socket.on("chat:typing", async ({ recipientUsername, typing }) => {
     try {
@@ -759,6 +1042,7 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {
     updateSocketPresence(account, -1);
     schedulePresenceUpdate();
+    scheduleAdminMonitoringUpdate();
   });
 });
 
@@ -795,19 +1079,55 @@ app.post("/api/login", loginLimiter, async (req, res, next) => {
   try {
     if (scope === "account" || scope === "admin") {
       const accountUsername = normalizeUsername(username || process.env.ADMIN_USERNAME || "admin");
+      const activityContext = await buildActivityContext(req, req.body && req.body.activity);
+      const risk = await detectSuspiciousLogin(accountUsername, activityContext);
       const user = await authenticateUser(accountUsername, password);
 
       if (!user) {
+        await recordLoginAttempt({
+          username: accountUsername,
+          success: false,
+          reason: "bad_credentials",
+          suspicious: risk.suspicious,
+          suspiciousReason: risk.reason,
+          sessionId: req.sessionID,
+          context: activityContext
+        });
+        scheduleAdminMonitoringUpdate();
         return res.status(401).json({ error: "Username or password is wrong." });
+      }
+
+      if (isAccountBlocked(user)) {
+        await recordLoginAttempt({
+          username: accountUsername,
+          success: false,
+          reason: user.accountStatus === "suspended" ? "account_suspended" : "account_blocked",
+          suspicious: risk.suspicious,
+          suspiciousReason: risk.reason,
+          sessionId: req.sessionID,
+          context: activityContext
+        });
+        scheduleAdminMonitoringUpdate();
+        return res.status(403).json({ error: accountBlockedMessage(user) });
       }
 
       const account = publicAccount(user);
       markUserActive(account);
       account.isActive = true;
       req.session.accountUser = account;
-      await updateUserOnlineStatus(account.username, true);
+      await startUserSession(account.username, req.sessionID, activityContext);
+      await recordLoginAttempt({
+        username: account.username,
+        success: true,
+        reason: "",
+        suspicious: risk.suspicious,
+        suspiciousReason: risk.reason,
+        sessionId: req.sessionID,
+        context: activityContext
+      });
       invalidateUserCache();
       schedulePresenceUpdate();
+      scheduleAdminMonitoringUpdate();
       return res.json({
         ok: true,
         user: req.session.accountUser,
@@ -935,15 +1255,53 @@ app.get("/api/session", async (req, res, next) => {
 
   try {
     if (req.session.accountUser && req.session.accountUser.username) {
-      await updateUserOnlineStatus(
-        req.session.accountUser.username,
-        true
-      );
+      await heartbeatUserSession(req.session.accountUser.username, req.sessionID);
+      markUserActive(req.session.accountUser);
     }
 
     return res.json({
       user: req.session.accountUser ? publicAccount(req.session.accountUser) : null
     });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post("/api/ping", requireAccount, analyticsLimiter, async (req, res, next) => {
+  noStore(res);
+
+  try {
+    const username = req.session.accountUser.username;
+    const user = await findUser(username);
+
+    if (!user) {
+      activeUsers.delete(username);
+      await endUserSession(username, req.sessionID);
+      invalidateUserCache();
+      schedulePresenceUpdate();
+      scheduleAdminMonitoringUpdate();
+      req.session.destroy(() => {});
+      return res.status(401).json({ error: "Please log in to your inbox." });
+    }
+
+    if (isAccountBlocked(user)) {
+      activeUsers.delete(username);
+      await endUserSession(username, req.sessionID);
+      invalidateUserCache();
+      schedulePresenceUpdate();
+      scheduleAdminMonitoringUpdate();
+      req.session.destroy(() => {});
+      return res.status(403).json({ error: accountBlockedMessage(user) });
+    }
+
+    const context = await buildActivityContext(req, req.body && req.body.activity);
+    await heartbeatUserSession(username, req.sessionID, context);
+    req.session.accountUser = publicAccount({ ...user, anonymousMode: req.session.accountUser.anonymousMode });
+    markUserActive(req.session.accountUser);
+    invalidateUserCache();
+    schedulePresenceUpdate();
+    scheduleAdminMonitoringUpdate();
+    return res.json({ ok: true, user: req.session.accountUser });
   } catch (error) {
     return next(error);
   }
@@ -970,6 +1328,7 @@ async function saveAnonymousMode(req, res, next) {
     markUserActive(req.session.accountUser);
     invalidateUserCache();
     schedulePresenceUpdate();
+    scheduleAdminMonitoringUpdate();
 
     return res.json({
       ok: true,
@@ -1026,6 +1385,7 @@ app.patch("/api/account/profile", requireAccount, async (req, res, next) => {
 
     invalidateUserCache();
     schedulePresenceUpdate();
+    scheduleAdminMonitoringUpdate();
 
     return res.json({
       ok: true,
@@ -1064,6 +1424,7 @@ app.patch("/api/profile", requireAccount, async (req, res, next) => {
     markUserActive(req.session.accountUser);
     invalidateUserCache();
     schedulePresenceUpdate();
+    scheduleAdminMonitoringUpdate();
     return res.json({ ok: true, user: publicAccount(req.session.accountUser) });
   } catch (error) {
     return next(error);
@@ -1084,6 +1445,7 @@ app.post("/api/profile/avatar", requireAccount, handleAvatarUpload, async (req, 
     req.session.accountUser = publicAccount(updated);
     invalidateUserCache();
     schedulePresenceUpdate();
+    scheduleAdminMonitoringUpdate();
     return res.json({ ok: true, user: publicAccount(req.session.accountUser) });
   } catch (error) {
     return next(error);
@@ -1117,9 +1479,10 @@ app.post("/api/logout", async (req, res, next) => {
 
   if (username) {
     activeUsers.delete(username);
-    await updateUserOnlineStatus(username, false);
+    await endUserSession(username, req.sessionID);
     invalidateUserCache();
     schedulePresenceUpdate();
+    scheduleAdminMonitoringUpdate();
   }
   req.session.destroy((error) => {
     if (error) {
@@ -1275,6 +1638,84 @@ app.get("/api/active-friends", requireAccount, async (req, res, next) => {
   }
 });
 
+app.get("/api/admin/monitoring", requireUltimateAdmin, analyticsLimiter, async (req, res, next) => {
+  try {
+    noStore(res);
+    const monitoring = await getUltimateAdminMonitoring({ limit: req.query.limit || 120 });
+    return res.json({
+      ...monitoring,
+      notice:
+        "This dashboard shows transparent security monitoring data for signed-in accounts. Anonymous Mode is still hidden from regular users."
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get("/api/admin/users/:username/logins", requireUltimateAdmin, analyticsLimiter, async (req, res, next) => {
+  try {
+    noStore(res);
+    const history = await listUserLoginHistory(req.params.username, { limit: req.query.limit || 80 });
+    return res.json({ history });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.patch("/api/admin/users/:username/security", requireUltimateAdmin, analyticsLimiter, async (req, res, next) => {
+  try {
+    noStore(res);
+
+    const targetUsername = normalizeUsername(req.params.username);
+    const accountStatus = String(req.body && req.body.accountStatus || "active").trim();
+    const suspendedUntil = req.body && req.body.suspendedUntil ? String(req.body.suspendedUntil) : "";
+    const blockedReason = cleanText(req.body && req.body.blockedReason).slice(0, 240);
+
+    if (!["active", "blocked", "suspended"].includes(accountStatus)) {
+      return res.status(400).json({ error: "Choose active, blocked, or suspended." });
+    }
+
+    if (targetUsername === normalizeUsername(req.session.accountUser.username) && accountStatus !== "active") {
+      return res.status(400).json({ error: "You cannot block or suspend your own admin account." });
+    }
+
+    const updated = await updateUserSecurityStatus(targetUsername, {
+      accountStatus,
+      suspendedUntil: accountStatus === "suspended" ? suspendedUntil : "",
+      blockedReason,
+      isShadowBanned: false
+    });
+
+    if (!updated) {
+      return res.status(404).json({ error: "Account was not found." });
+    }
+
+    await logAdminAction({
+      adminUsername: req.session.accountUser.username,
+      action: `account_${accountStatus}`,
+      targetUsername,
+      details: { accountStatus, blockedReason, suspendedUntil: accountStatus === "suspended" ? suspendedUntil : "" },
+      ipAddress: getClientIp(req)
+    });
+
+    if (accountStatus !== "active") {
+      activeUsers.delete(targetUsername);
+      await endUserSession(targetUsername, "");
+      io.to(userRoom(targetUsername)).emit("account:security", {
+        accountStatus,
+        message: accountBlockedMessage(updated)
+      });
+    }
+
+    invalidateUserCache();
+    schedulePresenceUpdate();
+    scheduleAdminMonitoringUpdate();
+    return res.json({ ok: true, user: publicRecipient(updated, req.session.accountUser) });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 app.get("/api/messages", requireAccount, async (req, res, next) => {
   try {
     noStore(res);
@@ -1299,6 +1740,16 @@ app.delete("/api/messages/:id", requireAccount, async (req, res, next) => {
 
     if (!deleted) {
       return res.status(404).json({ error: "Message not found." });
+    }
+
+    if (isUltimateAdmin(req.session.accountUser)) {
+      await logAdminAction({
+        adminUsername: req.session.accountUser.username,
+        action: "delete_message",
+        details: { messageId: id },
+        ipAddress: getClientIp(req)
+      });
+      scheduleAdminMonitoringUpdate();
     }
 
     return res.json({ ok: true });
@@ -1328,7 +1779,22 @@ initStore()
       cleanupExpiredMessages().catch((error) => {
         console.error("Expired message cleanup failed.", error);
       });
+      cleanupAnalyticsLogs().catch((error) => {
+        console.error("Analytics cleanup failed.", error);
+      });
     }, 60 * 60 * 1000);
+
+    setInterval(() => {
+      markStaleUsersOffline()
+        .then(() => {
+          invalidateUserCache();
+          schedulePresenceUpdate();
+          scheduleAdminMonitoringUpdate();
+        })
+        .catch((error) => {
+          console.error("Stale presence cleanup failed.", error);
+        });
+    }, 60 * 1000);
 
     httpServer.listen(PORT, () => {
       console.log(`Private anonymous messaging site running on http://localhost:${PORT}`);

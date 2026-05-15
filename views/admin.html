@@ -8,7 +8,7 @@
     <title>ForyoU Letters</title>
     <link rel="manifest" href="/manifest.webmanifest">
     <link rel="preload" href="/assets/seal.svg" as="image" type="image/svg+xml">
-    <link rel="stylesheet" href="/css/styles.css?v=20260512-8">
+    <link rel="stylesheet" href="/css/styles.css?v=20260516-analytics">
   </head>
   <body>
     <main class="page-shell admin-shell">
@@ -17,6 +17,7 @@
         <p class="eyebrow">ForyoU Letters</p>
         <h1 id="admin-login-title">Open your private desk.</h1>
         <p class="soft-copy">A quiet place for chats, letters, voice notes, and the words people keep.</p>
+        <p class="file-hint">For account security, login time, device/browser details, and approximate IP location may be visible to the ultimate admin.</p>
 
         <form class="stack" id="admin-login-form" novalidate>
           <input type="hidden" name="scope" value="account">
@@ -165,6 +166,25 @@
             <p class="file-hint" id="privacy-status"></p>
           </div>
 
+          <div class="drawer-section admin-monitoring is-hidden" id="ultimate-admin-panel">
+            <p class="drawer-label">Ultimate Admin</p>
+            <p class="file-hint">Transparent security monitoring for signed-in accounts. Regular users still cannot see anonymous active status.</p>
+
+            <div class="monitor-stats" id="monitor-stats" aria-label="Security monitoring stats"></div>
+            <div class="monitor-toolbar">
+              <button class="button secondary-button compact-button" id="monitor-refresh-button" type="button">Update</button>
+            </div>
+
+            <p class="drawer-label">Live accounts</p>
+            <div class="monitor-user-list" id="monitor-user-list"></div>
+
+            <details class="monitor-details">
+              <summary>Login and security events</summary>
+              <div class="monitor-event-list" id="monitor-event-list"></div>
+            </details>
+            <p class="form-message" id="monitor-status" role="status" aria-live="polite"></p>
+          </div>
+
           <div class="drawer-actions">
             <a class="button secondary-button link-button" href="/profile">Profile settings</a>
             <button class="button secondary-button" id="refresh-button" type="button">Refresh</button>
@@ -210,6 +230,6 @@
     </template>
 
     <script src="/socket.io/socket.io.js" defer></script>
-    <script src="/js/admin.js?v=20260512-8" defer></script>
+    <script src="/js/admin.js?v=20260516-analytics" defer></script>
   </body>
 </html>

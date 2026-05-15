@@ -53,9 +53,16 @@ const peerProfileName = document.querySelector("#peer-profile-name");
 const peerProfileStatus = document.querySelector("#peer-profile-status");
 const peerProfileUsername = document.querySelector("#peer-profile-username");
 const peerProfileBio = document.querySelector("#peer-profile-bio");
+const ultimateAdminPanel = document.querySelector("#ultimate-admin-panel");
+const monitorStats = document.querySelector("#monitor-stats");
+const monitorUserList = document.querySelector("#monitor-user-list");
+const monitorEventList = document.querySelector("#monitor-event-list");
+const monitorStatus = document.querySelector("#monitor-status");
+const monitorRefreshButton = document.querySelector("#monitor-refresh-button");
 
 const ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
-const REFRESH_MS = 45000;
+const REFRESH_MS = 120000;
+const HEARTBEAT_MS = 45000;
 const TYPING_IDLE_MS = 1200;
 
 let currentUser = null;
@@ -68,6 +75,8 @@ let refreshTimer = null;
 let socket = null;
 let typingTimer = null;
 let messageSearchTimer = null;
+let heartbeatTimer = null;
+let monitoringDebounceTimer = null;
 let pendingAudioBlob = null;
 let mediaRecorder = null;
 let recordingChunks = [];
@@ -92,6 +101,12 @@ function setInlineStatus(element, text, type = "neutral") {
   element.dataset.type = type;
 }
 
+function setMonitorStatus(text, type = "neutral") {
+  if (!monitorStatus) return;
+  monitorStatus.textContent = text;
+  monitorStatus.dataset.type = type;
+}
+
 function countCharacters(value) {
   return Array.from(value).length;
 }
@@ -100,6 +115,23 @@ function updateCounter() {
   const count = countCharacters(accountMessage.value);
   accountCharacterCount.textContent = String(count);
   accountCharacterCount.parentElement.dataset.warning = count > 450 ? "true" : "false";
+}
+
+function collectClientActivity() {
+  const screenInfo = window.screen || {};
+
+  return {
+    screenWidth: Math.round(screenInfo.width || window.innerWidth || 0),
+    screenHeight: Math.round(screenInfo.height || window.innerHeight || 0),
+    devicePixelRatio: Number(window.devicePixelRatio || 1),
+    language: navigator.language || "",
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "",
+    onlineState: navigator.onLine
+  };
+}
+
+function isUltimateAdminUser(user) {
+  return Boolean(user && user.role === "ultimate_admin");
 }
 
 // UX polish: resize the composer on the next frame so typing feels smooth without layout thrash.
@@ -147,6 +179,7 @@ function showMessagesPanel() {
 
 function showLoginPanel() {
   stopAutoRefresh();
+  stopHeartbeat();
   if (socket) {
     socket.disconnect();
     socket = null;
@@ -174,6 +207,26 @@ function formatChatTime(isoDate) {
   }).format(new Date(isoDate));
 }
 
+function formatShortDate(isoDate) {
+  if (!isoDate) return "never";
+
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  }).format(new Date(isoDate));
+}
+
+function formatDuration(seconds) {
+  const value = Number(seconds || 0);
+
+  if (!value) return "0m";
+  if (value < 60) return `${value}s`;
+  if (value < 3600) return `${Math.floor(value / 60)}m`;
+  return `${Math.floor(value / 3600)}h ${Math.floor((value % 3600) / 60)}m`;
+}
+
 function makeEmptyState(text) {
   const empty = document.createElement("div");
   empty.className = "empty-state";
@@ -195,6 +248,7 @@ function updateAccountHeader() {
   anonymousModeToggle.checked = Boolean(currentUser.anonymousMode);
   activeStatus.textContent = currentUser.anonymousMode ? "Anonymous Mode on" : "Active now";
   accountPresenceDot.classList.toggle("is-active", !currentUser.anonymousMode);
+  ultimateAdminPanel?.classList.toggle("is-hidden", !isUltimateAdminUser(currentUser));
   document.body.dataset.theme = currentUser.theme || "vintage-dark";
   document.body.dataset.font = currentUser.fontStyle || "serif";
 }
@@ -326,6 +380,106 @@ function renderActiveFriends() {
   );
 }
 
+function makeMonitorStat(label, value) {
+  const item = document.createElement("span");
+  const strong = document.createElement("strong");
+  const small = document.createElement("small");
+  strong.textContent = String(value);
+  small.textContent = label;
+  item.append(strong, small);
+  return item;
+}
+
+function renderMonitoring(data) {
+  if (!isUltimateAdminUser(currentUser) || !data || !monitorStats || !monitorUserList || !monitorEventList) {
+    return;
+  }
+
+  const stats = data.stats || {};
+  monitorStats.replaceChildren(
+    makeMonitorStat("online", stats.onlineUsers || 0),
+    makeMonitorStat("anonymous online", stats.anonymousOnlineUsers || 0),
+    makeMonitorStat("alerts", stats.suspiciousEvents || 0),
+    makeMonitorStat("restricted", stats.blockedUsers || 0)
+  );
+
+  const users = data.users || [];
+  if (!users.length) {
+    monitorUserList.replaceChildren(makeEmptyState("No account data yet."));
+  } else {
+    monitorUserList.replaceChildren(
+      ...users.map((user) => {
+        const item = document.createElement("article");
+        const top = document.createElement("div");
+        const avatar = document.createElement("span");
+        const copy = document.createElement("span");
+        const name = document.createElement("strong");
+        const meta = document.createElement("small");
+        const details = document.createElement("p");
+        const actions = document.createElement("div");
+        const blockButton = document.createElement("button");
+        const suspendButton = document.createElement("button");
+        const activateButton = document.createElement("button");
+        const session = user.session || {};
+        const isRestricted = user.accountStatus === "blocked" || user.accountStatus === "suspended";
+        const location = [session.city, session.country].filter(Boolean).join(", ") || "location unavailable";
+        const device = [session.deviceType, session.browser, session.operatingSystem].filter(Boolean).join(" • ") || "device unavailable";
+
+        item.className = "monitor-user-card";
+        top.className = "monitor-user-topline";
+        avatar.className = "sender-avatar";
+        copy.className = "monitor-user-copy";
+        actions.className = "monitor-actions";
+        applyAvatar(avatar, user, user.displayName);
+
+        name.textContent = `${user.displayName || user.username} @${user.username}`;
+        meta.textContent = `${user.isOnline ? "Online" : `Last seen ${formatShortDate(user.lastSeen)}`}${user.anonymousMode ? " • Anonymous Mode" : ""}`;
+        details.textContent = `${device} • ${location} • session ${formatDuration(session.durationSeconds || user.sessionDurationSeconds)}`;
+
+        blockButton.type = "button";
+        blockButton.textContent = "Block";
+        blockButton.disabled = isRestricted || user.username === currentUser.username;
+        blockButton.addEventListener("click", () => updateSecurityStatus(user.username, "blocked"));
+
+        suspendButton.type = "button";
+        suspendButton.textContent = "Suspend 24h";
+        suspendButton.disabled = isRestricted || user.username === currentUser.username;
+        suspendButton.addEventListener("click", () => updateSecurityStatus(user.username, "suspended"));
+
+        activateButton.type = "button";
+        activateButton.textContent = "Activate";
+        activateButton.disabled = !isRestricted;
+        activateButton.addEventListener("click", () => updateSecurityStatus(user.username, "active"));
+
+        copy.append(name, meta);
+        top.append(avatar, copy);
+        actions.append(blockButton, suspendButton, activateButton);
+        item.append(top, details, actions);
+        return item;
+      })
+    );
+  }
+
+  const events = [...(data.suspicious || []), ...(data.adminActions || [])].slice(0, 12);
+  if (!events.length) {
+    monitorEventList.replaceChildren(makeEmptyState("No recent security events."));
+  } else {
+    monitorEventList.replaceChildren(
+      ...events.map((event) => {
+        const item = document.createElement("p");
+        const isLogin = Object.prototype.hasOwnProperty.call(event, "success");
+        item.className = "monitor-event";
+        item.textContent = isLogin
+          ? `${event.success ? "Login" : "Failed login"}: ${event.username || "unknown"}${event.suspiciousReason ? ` • ${event.suspiciousReason}` : ""} • ${formatShortDate(event.createdAt)}`
+          : `${event.action}: ${event.targetUsername || "system"} • ${formatShortDate(event.createdAt)}`;
+        return item;
+      })
+    );
+  }
+
+  setMonitorStatus(`Updated ${formatShortDate(data.generatedAt)}.`, "success");
+}
+
 function ensureConversationForRecipients() {
   const existing = new Set(conversations.map((item) => item.peerUsername));
   const additions = recipients
@@ -443,8 +597,9 @@ function findReplyMessage(id) {
 
 function renderAttachment(message, container) {
   const attachment = message.attachment || message.image;
+  const source = attachment && (attachment.data || attachment.url);
 
-  if (!attachment || !attachment.data) {
+  if (!attachment || !source) {
     container.classList.add("is-hidden");
     return;
   }
@@ -455,7 +610,9 @@ function renderAttachment(message, container) {
   if (message.kind === "image" || attachment.mime.startsWith("image/")) {
     const img = document.createElement("img");
     img.className = "message-image";
-    img.src = attachment.data;
+    img.loading = "lazy";
+    img.decoding = "async";
+    img.src = source;
     img.alt = attachment.name || "Attached photo";
     container.append(img);
     return;
@@ -464,7 +621,8 @@ function renderAttachment(message, container) {
   if (message.kind === "audio" || attachment.mime.startsWith("audio/")) {
     const audio = document.createElement("audio");
     audio.controls = true;
-    audio.src = attachment.data;
+    audio.preload = "metadata";
+    audio.src = source;
     container.append(audio);
     return;
   }
@@ -472,14 +630,20 @@ function renderAttachment(message, container) {
   if (message.kind === "video" || attachment.mime.startsWith("video/")) {
     const video = document.createElement("video");
     video.controls = true;
-    video.src = attachment.data;
+    video.preload = "metadata";
+    video.src = source;
     container.append(video);
     return;
   }
 
   const link = document.createElement("a");
-  link.href = attachment.data;
-  link.download = attachment.name || "attachment";
+  link.href = source;
+  if (attachment.data) {
+    link.download = attachment.name || "attachment";
+  } else {
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+  }
   link.textContent = attachment.name || "Open attachment";
   link.className = "attachment-link";
   container.append(link);
@@ -575,7 +739,9 @@ async function loadSession() {
 
     connectSocket();
     startAutoRefresh();
+    startHeartbeat();
     await loadAll();
+    await loadAdminMonitoring();
 
     showMessagesPanel();
     document.getElementById("admin-loading-panel")?.classList.add("is-hidden");
@@ -631,6 +797,103 @@ async function loadActiveFriends() {
   if (response.ok) {
     activeUsers = result.users || [];
     renderActiveFriends();
+  }
+}
+
+async function loadAdminMonitoring() {
+  if (!isUltimateAdminUser(currentUser)) {
+    return;
+  }
+
+  setMonitorStatus("Updating...", "neutral");
+
+  try {
+    const response = await fetch("/api/admin/monitoring", { cache: "no-store" });
+    const result = await response.json();
+
+    if (!response.ok) {
+      setMonitorStatus(result.error || "Could not load monitoring.", "error");
+      return;
+    }
+
+    renderMonitoring(result);
+  } catch {
+    setMonitorStatus("Network error while loading monitoring.", "error");
+  }
+}
+
+function scheduleMonitoringLoad() {
+  if (!isUltimateAdminUser(currentUser)) {
+    return;
+  }
+
+  window.clearTimeout(monitoringDebounceTimer);
+  monitoringDebounceTimer = window.setTimeout(loadAdminMonitoring, 350);
+}
+
+async function updateSecurityStatus(username, accountStatus) {
+  if (!isUltimateAdminUser(currentUser)) {
+    return;
+  }
+
+  const payload = {
+    accountStatus,
+    blockedReason: accountStatus === "active" ? "" : "Updated by ultimate admin dashboard."
+  };
+
+  if (accountStatus === "suspended") {
+    payload.suspendedUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  }
+
+  setMonitorStatus("Saving account status...", "neutral");
+
+  try {
+    const response = await fetch(`/api/admin/users/${encodeURIComponent(username)}/security`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const result = await response.json();
+
+    if (!response.ok) {
+      setMonitorStatus(result.error || "Could not update account.", "error");
+      return;
+    }
+
+    setMonitorStatus("Account status saved.", "success");
+    await loadAdminMonitoring();
+    await loadAll();
+  } catch {
+    setMonitorStatus("Network error while saving account.", "error");
+  }
+}
+
+async function sendHeartbeat() {
+  if (!currentUser) {
+    return;
+  }
+
+  try {
+    const response = await fetch("/api/ping", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ activity: collectClientActivity() })
+    });
+    const result = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      setLoginMessage(result.error || "Please log in again.", "error");
+      currentUser = null;
+      showLoginPanel();
+      return;
+    }
+
+    if (result.user) {
+      currentUser = result.user;
+      updateAccountHeader();
+    }
+  } catch {
+    // Heartbeats are best-effort; the next socket or manual refresh will repair the view.
   }
 }
 
@@ -760,6 +1023,14 @@ function connectSocket() {
     }
 
     typingStatus.textContent = typing ? `${displayName} is writing...` : "";
+  });
+
+  socket.on("admin:monitoring-dirty", scheduleMonitoringLoad);
+
+  socket.on("account:security", ({ message }) => {
+    setLoginMessage(message || "Your account status changed. Please log in again.", "error");
+    currentUser = null;
+    showLoginPanel();
   });
 }
 
@@ -1014,6 +1285,7 @@ function startAutoRefresh() {
   refreshTimer = window.setInterval(() => {
     if (!document.hidden && currentUser) {
       loadAll();
+      scheduleMonitoringLoad();
     }
   }, REFRESH_MS);
 }
@@ -1022,6 +1294,23 @@ function stopAutoRefresh() {
   if (refreshTimer) {
     window.clearInterval(refreshTimer);
     refreshTimer = null;
+  }
+}
+
+function startHeartbeat() {
+  stopHeartbeat();
+  sendHeartbeat();
+  heartbeatTimer = window.setInterval(() => {
+    if (!document.hidden && currentUser) {
+      sendHeartbeat();
+    }
+  }, HEARTBEAT_MS);
+}
+
+function stopHeartbeat() {
+  if (heartbeatTimer) {
+    window.clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
   }
 }
 
@@ -1044,7 +1333,7 @@ loginForm.addEventListener("submit", async (event) => {
     const response = await fetch("/api/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password, scope: "account" })
+      body: JSON.stringify({ username, password, scope: "account", activity: collectClientActivity() })
     });
     const result = await response.json();
 
@@ -1058,7 +1347,9 @@ loginForm.addEventListener("submit", async (event) => {
     showMessagesPanel();
     connectSocket();
     startAutoRefresh();
+    startHeartbeat();
     await loadAll();
+    await loadAdminMonitoring();
   } catch {
     setLoginMessage("Network error. Please try again.", "error");
   } finally {
@@ -1067,6 +1358,7 @@ loginForm.addEventListener("submit", async (event) => {
 });
 
 refreshButton.addEventListener("click", loadAll);
+monitorRefreshButton?.addEventListener("click", loadAdminMonitoring);
 backChatButton.addEventListener("click", closeConversation);
 viewProfileButton.addEventListener("click", openPeerProfile);
 peerProfileClose.addEventListener("click", closePeerProfile);
@@ -1127,7 +1419,11 @@ document.addEventListener("keydown", (event) => {
   }
 });
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden && currentUser) loadAll();
+  if (!document.hidden && currentUser) {
+    sendHeartbeat();
+    loadAll();
+    scheduleMonitoringLoad();
+  }
 });
 
 if ("serviceWorker" in navigator) {

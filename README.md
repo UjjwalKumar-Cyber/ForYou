@@ -65,10 +65,14 @@ foryou/
 - Mobile-first nostalgic letter UI with dark, light, and midnight themes
 - PWA manifest and service worker for app-like loading of static assets
 - Long-lived sessions with manual logout
+- Transparent ultimate-admin monitoring for online status, last seen, login history, suspicious login attempts, device/browser summaries, and approximate IP-based city/country
+- Admin account block/suspend controls with admin action logs
+- Optional Cloudinary media storage so profile pictures and uploads are stored as URLs instead of large database blobs
 - `helmet` security headers and `express-rate-limit`
 - Server-side sanitization with `sanitize-html`
 - Client-side rendering avoids injecting user text as HTML
 - `noindex, nofollow` meta tags and `robots.txt` crawler deny rule
+- Gzip compression, PostgreSQL pooling, targeted indexes, pagination limits, optimized image compression, lazy media loading, and periodic cleanup
 
 ## Setup
 
@@ -96,6 +100,12 @@ Optional extra accounts can be seeded with:
 
 ```bash
 ACCOUNT_USERS=ujjwal:password123,aavnya:anotherpassword
+```
+
+Optional Cloudinary media storage:
+
+```bash
+CLOUDINARY_URL=cloudinary://API_KEY:API_SECRET@CLOUD_NAME
 ```
 
 The app stores password hashes, not readable passwords. To manually create a hashed password:
@@ -140,6 +150,10 @@ GET    /api/messages/starred
 POST   /api/messages/:id/star
 POST   /api/messages/:id/reactions
 DELETE /api/messages/:id
+POST   /api/ping
+GET    /api/admin/monitoring
+GET    /api/admin/users/:username/logins
+PATCH  /api/admin/users/:username/security
 GET    /api/profile
 PATCH  /api/profile
 POST   /api/profile/avatar
@@ -205,4 +219,6 @@ After deployment:
 
 ## Privacy Notes
 
-The app saves message text, sender display name, recipient username, timestamps, media data, profile settings, and password hashes. It does not save sender email, sender IP address, or public visitor login details with messages. Rate limiting uses the current browser session as its key and stores counters only in memory.
+The app saves message text, sender display name, recipient username, timestamps, media URLs or media data, profile settings, and password hashes. Public secret-page messages do not store sender IP, email, or login details.
+
+For signed-in accounts, the ultimate admin dashboard transparently stores security analytics: online status, last seen, login/logout/session times, login attempts, device/browser details, screen size, language, timezone, IP address, and approximate IP-based city/country/ISP when available. It does not collect exact GPS, contacts, SMS, calls, IMEI, or private device identifiers. Anonymous Mode still hides online, typing, and read receipts from regular users; only the ultimate admin monitoring dashboard can see true online status for security.

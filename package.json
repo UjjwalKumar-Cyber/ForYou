@@ -12,6 +12,7 @@
     "node": ">=18.18.0"
   },
   "dependencies": {
+    "cloudinary": "^2.10.0",
     "compression": "^1.8.1",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",

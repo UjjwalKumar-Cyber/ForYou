@@ -61,6 +61,8 @@ function hasProfileImage(user) {
   return Boolean(
     user.profileImageData ||
       user.profile_image_data ||
+      user.profileImageUrl ||
+      user.profile_image_url ||
       user.profileImageMime ||
       user.profile_image_mime ||
       user.profileImageName ||
@@ -111,8 +113,9 @@ function parseSeedUsers() {
 function normalizeImage(message) {
   const image = message.image || {};
   const data = image.data || message.imageData || message.image_data || null;
+  const url = image.url || message.imageUrl || message.image_url || "";
 
-  if (!data) {
+  if (!data && !url) {
     return null;
   }
 
@@ -120,6 +123,7 @@ function normalizeImage(message) {
 
   return {
     data,
+    url,
     mime: image.mime || message.imageMime || message.image_mime || "image/jpeg",
     name: image.name || message.imageName || message.image_name || "attached image",
     size: Number.isFinite(size) ? size : 0
@@ -151,8 +155,9 @@ function normalizeAttachment(message) {
     message.imageData ||
     message.image_data ||
     null;
+  const url = attachment.url || message.attachmentUrl || message.attachment_url || message.imageUrl || message.image_url || "";
 
-  if (!data) {
+  if (!data && !url) {
     return null;
   }
 
@@ -167,6 +172,7 @@ function normalizeAttachment(message) {
 
   return {
     data,
+    url,
     mime:
       attachment.mime ||
       message.attachmentMime ||
@@ -220,6 +226,7 @@ function normalizeUser(user) {
     email: user.email || "",
     emailVerified: Boolean(user.emailVerified || user.email_verified),
     profileImageData: user.profileImageData || user.profile_image_data || "",
+    profileImageUrl: user.profileImageUrl || user.profile_image_url || "",
     profileImageMime: user.profileImageMime || user.profile_image_mime || "",
     profileImageName: user.profileImageName || user.profile_image_name || "",
     hasProfileImage: Boolean(user.hasProfileImage || user.has_profile_image || hasProfileImage(user)),
@@ -230,6 +237,15 @@ function normalizeUser(user) {
     themeColor: user.themeColor || user.theme_color || "rose",
     isOnline: Boolean(user.isOnline || user.is_online),
     lastSeen: user.lastSeen || user.last_seen || null,
+    loginTime: user.loginTime || user.login_time || null,
+    logoutTime: user.logoutTime || user.logout_time || null,
+    currentSessionId: user.currentSessionId || user.current_session_id || "",
+    sessionDurationSeconds: Number(user.sessionDurationSeconds || user.session_duration_seconds || 0),
+    accountStatus: user.accountStatus || user.account_status || "active",
+    isShadowBanned: Boolean(user.isShadowBanned || user.is_shadow_banned),
+    suspendedUntil: user.suspendedUntil || user.suspended_until || null,
+    blockedAt: user.blockedAt || user.blocked_at || null,
+    blockedReason: user.blockedReason || user.blocked_reason || "",
     passwordChangedAt: user.passwordChangedAt || user.password_changed_at || null,
     createdAt: user.createdAt || user.created_at || new Date().toISOString()
   };
@@ -245,7 +261,107 @@ function normalizeStore(rawStore) {
 
   return {
     users: Array.isArray(rawStore.users) ? rawStore.users.map(normalizeUser) : [],
-    messages: Array.isArray(rawStore.messages) ? rawStore.messages.map(normalizeMessage) : []
+    messages: Array.isArray(rawStore.messages) ? rawStore.messages.map(normalizeMessage) : [],
+    activitySessions: Array.isArray(rawStore.activitySessions) ? rawStore.activitySessions : [],
+    loginHistory: Array.isArray(rawStore.loginHistory) ? rawStore.loginHistory : [],
+    adminActionLogs: Array.isArray(rawStore.adminActionLogs) ? rawStore.adminActionLogs : []
+  };
+}
+
+function normalizeActivityContext(context = {}) {
+  const numberOrNull = (value) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  return {
+    ipAddress: String(context.ipAddress || "").slice(0, 80),
+    country: String(context.country || "").slice(0, 80),
+    state: String(context.state || "").slice(0, 120),
+    city: String(context.city || "").slice(0, 120),
+    locationTimezone: String(context.locationTimezone || "").slice(0, 120),
+    isp: String(context.isp || "").slice(0, 180),
+    vpnProxy: context.vpnProxy === null || context.vpnProxy === undefined ? null : Boolean(context.vpnProxy),
+    deviceType: String(context.deviceType || "").slice(0, 40),
+    operatingSystem: String(context.operatingSystem || "").slice(0, 80),
+    browser: String(context.browser || "").slice(0, 80),
+    browserVersion: String(context.browserVersion || "").slice(0, 80),
+    userAgent: String(context.userAgent || "").slice(0, 600),
+    screenWidth: numberOrNull(context.screenWidth),
+    screenHeight: numberOrNull(context.screenHeight),
+    devicePixelRatio: numberOrNull(context.devicePixelRatio),
+    language: String(context.language || "").slice(0, 80),
+    clientTimezone: String(context.clientTimezone || "").slice(0, 120),
+    onlineState: context.onlineState === null || context.onlineState === undefined ? null : Boolean(context.onlineState)
+  };
+}
+
+function normalizeLoginRecord(row = {}) {
+  return {
+    id: row.id,
+    username: normalizeUsername(row.username),
+    success: Boolean(row.success),
+    reason: row.reason || "",
+    suspicious: Boolean(row.suspicious),
+    suspiciousReason: row.suspiciousReason || row.suspicious_reason || "",
+    sessionId: row.sessionId || row.session_id || "",
+    ipAddress: row.ipAddress || row.ip_address || "",
+    country: row.country || "",
+    state: row.state || "",
+    city: row.city || "",
+    locationTimezone: row.locationTimezone || row.location_timezone || "",
+    isp: row.isp || "",
+    vpnProxy: row.vpnProxy === undefined ? row.vpn_proxy : row.vpnProxy,
+    deviceType: row.deviceType || row.device_type || "",
+    operatingSystem: row.operatingSystem || row.operating_system || "",
+    browser: row.browser || "",
+    browserVersion: row.browserVersion || row.browser_version || "",
+    userAgent: row.userAgent || row.user_agent || "",
+    createdAt: row.createdAt || row.created_at || new Date().toISOString()
+  };
+}
+
+function normalizeSessionRecord(row = {}) {
+  return {
+    id: row.id,
+    username: normalizeUsername(row.username),
+    sessionId: row.sessionId || row.session_id || "",
+    loginTime: row.loginTime || row.login_time || null,
+    logoutTime: row.logoutTime || row.logout_time || null,
+    lastSeen: row.lastSeen || row.last_seen || null,
+    durationSeconds: Number(row.durationSeconds || row.duration_seconds || 0),
+    isActive: Boolean(row.isActive || row.is_active),
+    ipAddress: row.ipAddress || row.ip_address || "",
+    country: row.country || "",
+    state: row.state || "",
+    city: row.city || "",
+    locationTimezone: row.locationTimezone || row.location_timezone || "",
+    isp: row.isp || "",
+    vpnProxy: row.vpnProxy === undefined ? row.vpn_proxy : row.vpnProxy,
+    deviceType: row.deviceType || row.device_type || "",
+    operatingSystem: row.operatingSystem || row.operating_system || "",
+    browser: row.browser || "",
+    browserVersion: row.browserVersion || row.browser_version || "",
+    userAgent: row.userAgent || row.user_agent || "",
+    screenWidth: Number(row.screenWidth || row.screen_width || 0),
+    screenHeight: Number(row.screenHeight || row.screen_height || 0),
+    devicePixelRatio: Number(row.devicePixelRatio || row.device_pixel_ratio || 0),
+    language: row.language || "",
+    clientTimezone: row.clientTimezone || row.client_timezone || "",
+    onlineState: row.onlineState === undefined ? row.online_state : row.onlineState,
+    createdAt: row.createdAt || row.created_at || new Date().toISOString()
+  };
+}
+
+function normalizeAdminAction(row = {}) {
+  return {
+    id: row.id,
+    adminUsername: normalizeUsername(row.adminUsername || row.admin_username),
+    action: row.action || "",
+    targetUsername: normalizeUsername(row.targetUsername || row.target_username),
+    details: parseJsonField(row.details, {}),
+    ipAddress: row.ipAddress || row.ip_address || "",
+    createdAt: row.createdAt || row.created_at || new Date().toISOString()
   };
 }
 
@@ -265,6 +381,7 @@ async function setupPostgresStore() {
     ADD COLUMN IF NOT EXISTS email TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT false,
     ADD COLUMN IF NOT EXISTS profile_image_data TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS profile_image_url TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS profile_image_mime TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS profile_image_name TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS anonymous_mode BOOLEAN NOT NULL DEFAULT false,
@@ -275,7 +392,16 @@ async function setupPostgresStore() {
     ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user',
     ADD COLUMN IF NOT EXISTS is_online BOOLEAN NOT NULL DEFAULT false,
-    ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ
+    ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS login_time TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS logout_time TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS current_session_id TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS session_duration_seconds INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS account_status TEXT NOT NULL DEFAULT 'active',
+    ADD COLUMN IF NOT EXISTS is_shadow_banned BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS suspended_until TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS blocked_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS blocked_reason TEXT NOT NULL DEFAULT ''
   `);
 
   await pool.query(`
@@ -309,6 +435,7 @@ async function setupPostgresStore() {
     ADD COLUMN IF NOT EXISTS sender_username TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'text',
     ADD COLUMN IF NOT EXISTS attachment_data TEXT,
+    ADD COLUMN IF NOT EXISTS attachment_url TEXT,
     ADD COLUMN IF NOT EXISTS attachment_mime TEXT,
     ADD COLUMN IF NOT EXISTS attachment_name TEXT,
     ADD COLUMN IF NOT EXISTS attachment_size INTEGER,
@@ -319,8 +446,96 @@ async function setupPostgresStore() {
     ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ
   `);
 
+  await pool.query(`
+    ALTER TABLE messages
+    ADD COLUMN IF NOT EXISTS image_url TEXT
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_activity_sessions (
+      id UUID PRIMARY KEY,
+      username TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      login_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+      logout_time TIMESTAMPTZ,
+      last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+      duration_seconds INTEGER NOT NULL DEFAULT 0,
+      is_active BOOLEAN NOT NULL DEFAULT true,
+      ip_address TEXT,
+      country TEXT,
+      state TEXT,
+      city TEXT,
+      location_timezone TEXT,
+      isp TEXT,
+      vpn_proxy BOOLEAN,
+      device_type TEXT,
+      operating_system TEXT,
+      browser TEXT,
+      browser_version TEXT,
+      user_agent TEXT,
+      screen_width INTEGER,
+      screen_height INTEGER,
+      device_pixel_ratio NUMERIC,
+      language TEXT,
+      client_timezone TEXT,
+      online_state BOOLEAN,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS login_history (
+      id UUID PRIMARY KEY,
+      username TEXT NOT NULL,
+      success BOOLEAN NOT NULL,
+      reason TEXT NOT NULL DEFAULT '',
+      suspicious BOOLEAN NOT NULL DEFAULT false,
+      suspicious_reason TEXT NOT NULL DEFAULT '',
+      session_id TEXT NOT NULL DEFAULT '',
+      ip_address TEXT,
+      country TEXT,
+      state TEXT,
+      city TEXT,
+      location_timezone TEXT,
+      isp TEXT,
+      vpn_proxy BOOLEAN,
+      device_type TEXT,
+      operating_system TEXT,
+      browser TEXT,
+      browser_version TEXT,
+      user_agent TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS admin_action_logs (
+      id UUID PRIMARY KEY,
+      admin_username TEXT NOT NULL,
+      action TEXT NOT NULL,
+      target_username TEXT NOT NULL DEFAULT '',
+      details TEXT NOT NULL DEFAULT '{}',
+      ip_address TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id BIGSERIAL PRIMARY KEY,
+      table_name TEXT NOT NULL,
+      action TEXT NOT NULL,
+      row_id TEXT,
+      details TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+
   await pool.query("CREATE INDEX IF NOT EXISTS idx_inbox_users_username ON inbox_users (username)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_inbox_users_display_name ON inbox_users (display_name)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_inbox_users_is_online ON inbox_users (is_online)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_inbox_users_last_seen ON inbox_users (last_seen DESC)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_inbox_users_account_status ON inbox_users (account_status)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_messages_sender_username ON messages (sender_username)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_messages_recipient_username ON messages (recipient_username)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages (created_at DESC)");
@@ -333,12 +548,26 @@ async function setupPostgresStore() {
   await pool.query(
     "CREATE INDEX IF NOT EXISTS idx_messages_expiry_unstarred ON messages (expires_at) WHERE expires_at IS NOT NULL AND starred_by = '[]'"
   );
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_user_activity_username ON user_activity_sessions (username)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_user_activity_session_id ON user_activity_sessions (session_id)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_user_activity_last_seen ON user_activity_sessions (last_seen DESC)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_user_activity_active ON user_activity_sessions (is_active)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_login_history_username_created ON login_history (username, created_at DESC)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_login_history_success_created ON login_history (success, created_at DESC)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_login_history_suspicious ON login_history (suspicious, created_at DESC)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_admin_action_logs_created ON admin_action_logs (created_at DESC)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_audit_logs_table_created ON audit_logs (table_name, created_at DESC)");
+
+  await cleanupAnalyticsLogs();
 
   await seedUsers();
 
   try {
     await pool.query("VACUUM ANALYZE inbox_users");
     await pool.query("VACUUM ANALYZE messages");
+    await pool.query("VACUUM ANALYZE user_activity_sessions");
+    await pool.query("VACUUM ANALYZE login_history");
+    await pool.query("VACUUM ANALYZE admin_action_logs");
   } catch (error) {
     console.warn("Postgres VACUUM ANALYZE skipped.", error.message);
   }
@@ -476,12 +705,22 @@ async function listUsers(options = {}) {
         display_name AS "displayName",
         role,
         bio,
+        profile_image_url AS "profileImageUrl",
         profile_image_mime AS "profileImageMime",
         profile_image_name AS "profileImageName",
-        (profile_image_mime <> '') AS "hasProfileImage",
+        (profile_image_mime <> '' OR profile_image_url <> '') AS "hasProfileImage",
         anonymous_mode AS "anonymousMode",
         is_online AS "isOnline",
         last_seen AS "lastSeen",
+        login_time AS "loginTime",
+        logout_time AS "logoutTime",
+        current_session_id AS "currentSessionId",
+        session_duration_seconds AS "sessionDurationSeconds",
+        account_status AS "accountStatus",
+        is_shadow_banned AS "isShadowBanned",
+        suspended_until AS "suspendedUntil",
+        blocked_at AS "blockedAt",
+        blocked_reason AS "blockedReason",
         created_at AS "createdAt"
       FROM inbox_users
       ORDER BY display_name ASC, username ASC
@@ -526,16 +765,26 @@ async function findUser(username, options = {}) {
           email,
           email_verified AS "emailVerified",
           ${profileImageDataSelect}
+          profile_image_url AS "profileImageUrl",
           profile_image_mime AS "profileImageMime",
           profile_image_name AS "profileImageName",
-          (profile_image_mime <> '') AS "hasProfileImage",
+          (profile_image_mime <> '' OR profile_image_url <> '') AS "hasProfileImage",
           anonymous_mode AS "anonymousMode",
           theme,
           wallpaper,
           font_style AS "fontStyle",
           theme_color AS "themeColor",
           is_online AS "isOnline",
-          last_seen AS "lastSeen"
+          last_seen AS "lastSeen",
+          login_time AS "loginTime",
+          logout_time AS "logoutTime",
+          current_session_id AS "currentSessionId",
+          session_duration_seconds AS "sessionDurationSeconds",
+          account_status AS "accountStatus",
+          is_shadow_banned AS "isShadowBanned",
+          suspended_until AS "suspendedUntil",
+          blocked_at AS "blockedAt",
+          blocked_reason AS "blockedReason"
         FROM inbox_users
         WHERE username = $1
       `,
@@ -575,6 +824,7 @@ async function authenticateUser(username, password) {
     role: user.role,
     email: user.email,
     emailVerified: user.emailVerified,
+    profileImageUrl: user.profileImageUrl,
     profileImageMime: user.profileImageMime,
     profileImageName: user.profileImageName,
     hasProfileImage: user.hasProfileImage,
@@ -584,7 +834,16 @@ async function authenticateUser(username, password) {
     fontStyle: user.fontStyle,
     themeColor: user.themeColor,
     isOnline: user.isOnline,
-    lastSeen: user.lastSeen
+    lastSeen: user.lastSeen,
+    loginTime: user.loginTime,
+    logoutTime: user.logoutTime,
+    currentSessionId: user.currentSessionId,
+    sessionDurationSeconds: user.sessionDurationSeconds,
+    accountStatus: user.accountStatus,
+    isShadowBanned: user.isShadowBanned,
+    suspendedUntil: user.suspendedUntil,
+    blockedAt: user.blockedAt,
+    blockedReason: user.blockedReason
   };
 }
 
@@ -760,16 +1019,26 @@ async function updateUserSettings(username, settings = {}) {
           bio,
           email,
           email_verified AS "emailVerified",
+          profile_image_url AS "profileImageUrl",
           profile_image_mime AS "profileImageMime",
           profile_image_name AS "profileImageName",
-          (profile_image_mime <> '') AS "hasProfileImage",
+          (profile_image_mime <> '' OR profile_image_url <> '') AS "hasProfileImage",
           anonymous_mode AS "anonymousMode",
           theme,
           wallpaper,
           font_style AS "fontStyle",
           theme_color AS "themeColor",
           is_online AS "isOnline",
-          last_seen AS "lastSeen"
+          last_seen AS "lastSeen",
+          login_time AS "loginTime",
+          logout_time AS "logoutTime",
+          current_session_id AS "currentSessionId",
+          session_duration_seconds AS "sessionDurationSeconds",
+          account_status AS "accountStatus",
+          is_shadow_banned AS "isShadowBanned",
+          suspended_until AS "suspendedUntil",
+          blocked_at AS "blockedAt",
+          blocked_reason AS "blockedReason"
       `,
       [
         nextSettings.displayName,
@@ -818,15 +1087,15 @@ async function updateUserAvatar(username, avatar = null) {
     return null;
   }
 
-  const image = avatar || { data: "", mime: "", name: "" };
+  const image = avatar || { data: "", url: "", mime: "", name: "" };
 
   if (usePostgres) {
     await initStore();
     const result = await pool.query(
       `
         UPDATE inbox_users
-        SET profile_image_data = $1, profile_image_mime = $2, profile_image_name = $3
-        WHERE username = $4
+        SET profile_image_data = $1, profile_image_url = $2, profile_image_mime = $3, profile_image_name = $4
+        WHERE username = $5
         RETURNING
           username,
           display_name AS "displayName",
@@ -835,18 +1104,28 @@ async function updateUserAvatar(username, avatar = null) {
           bio,
           email,
           email_verified AS "emailVerified",
+          profile_image_url AS "profileImageUrl",
           profile_image_mime AS "profileImageMime",
           profile_image_name AS "profileImageName",
-          (profile_image_mime <> '') AS "hasProfileImage",
+          (profile_image_mime <> '' OR profile_image_url <> '') AS "hasProfileImage",
           anonymous_mode AS "anonymousMode",
           theme,
           wallpaper,
           font_style AS "fontStyle",
           theme_color AS "themeColor",
           is_online AS "isOnline",
-          last_seen AS "lastSeen"
+          last_seen AS "lastSeen",
+          login_time AS "loginTime",
+          logout_time AS "logoutTime",
+          current_session_id AS "currentSessionId",
+          session_duration_seconds AS "sessionDurationSeconds",
+          account_status AS "accountStatus",
+          is_shadow_banned AS "isShadowBanned",
+          suspended_until AS "suspendedUntil",
+          blocked_at AS "blockedAt",
+          blocked_reason AS "blockedReason"
       `,
-      [image.data || "", image.mime || "", image.name || "", normalizedUsername]
+      [image.data || "", image.url || "", image.mime || "", image.name || "", normalizedUsername]
     );
 
     return result.rows[0] ? normalizeUser(result.rows[0]) : null;
@@ -861,6 +1140,7 @@ async function updateUserAvatar(username, avatar = null) {
     }
 
     user.profileImageData = image.data || "";
+    user.profileImageUrl = image.url || "";
     user.profileImageMime = image.mime || "";
     user.profileImageName = image.name || "";
     await writeJsonStore(store);
@@ -882,6 +1162,7 @@ async function getUserAvatar(username) {
       `
         SELECT
           profile_image_data AS "profileImageData",
+          profile_image_url AS "profileImageUrl",
           profile_image_mime AS "profileImageMime",
           profile_image_name AS "profileImageName"
         FROM inbox_users
@@ -892,12 +1173,13 @@ async function getUserAvatar(username) {
 
     const row = result.rows[0];
 
-    if (!row || !row.profileImageData) {
+    if (!row || (!row.profileImageData && !row.profileImageUrl)) {
       return null;
     }
 
     return {
       data: row.profileImageData,
+      url: row.profileImageUrl,
       mime: row.profileImageMime || "image/jpeg",
       name: row.profileImageName || "avatar"
     };
@@ -912,12 +1194,13 @@ async function getUserAvatar(username) {
 
   const user = normalizeUser(rawUser);
 
-  if (!user || !user.profileImageData) {
+  if (!user || (!user.profileImageData && !user.profileImageUrl)) {
     return null;
   }
 
   return {
     data: user.profileImageData,
+    url: user.profileImageUrl,
     mime: user.profileImageMime || "image/jpeg",
     name: user.profileImageName || "avatar"
   };
@@ -1007,6 +1290,7 @@ async function listConversationMessages(username, peerUsername, query = "") {
           recipient_username AS "recipientUsername",
           kind,
           attachment_data AS "attachmentData",
+          attachment_url AS "attachmentUrl",
           attachment_mime AS "attachmentMime",
           attachment_name AS "attachmentName",
           attachment_size AS "attachmentSize",
@@ -1016,6 +1300,7 @@ async function listConversationMessages(username, peerUsername, query = "") {
           expires_at AS "expiresAt",
           read_at AS "readAt",
           image_data AS "imageData",
+          image_url AS "imageUrl",
           image_mime AS "imageMime",
           image_name AS "imageName",
           image_size AS "imageSize",
@@ -1087,6 +1372,7 @@ async function listLetterMessages(username, query = "") {
           recipient_username AS "recipientUsername",
           kind,
           attachment_data AS "attachmentData",
+          attachment_url AS "attachmentUrl",
           attachment_mime AS "attachmentMime",
           attachment_name AS "attachmentName",
           attachment_size AS "attachmentSize",
@@ -1096,6 +1382,7 @@ async function listLetterMessages(username, query = "") {
           expires_at AS "expiresAt",
           read_at AS "readAt",
           image_data AS "imageData",
+          image_url AS "imageUrl",
           image_mime AS "imageMime",
           image_name AS "imageName",
           image_size AS "imageSize",
@@ -1271,6 +1558,7 @@ async function listMessagesForUser(username, options = {}) {
           recipient_username AS "recipientUsername",
           kind,
           attachment_data AS "attachmentData",
+          attachment_url AS "attachmentUrl",
           attachment_mime AS "attachmentMime",
           attachment_name AS "attachmentName",
           attachment_size AS "attachmentSize",
@@ -1280,6 +1568,7 @@ async function listMessagesForUser(username, options = {}) {
           expires_at AS "expiresAt",
           read_at AS "readAt",
           image_data AS "imageData",
+          image_url AS "imageUrl",
           image_mime AS "imageMime",
           image_name AS "imageName",
           image_size AS "imageSize",
@@ -1344,6 +1633,7 @@ async function addMessage({
           recipient_username,
           kind,
           attachment_data,
+          attachment_url,
           attachment_mime,
           attachment_name,
           attachment_size,
@@ -1353,6 +1643,7 @@ async function addMessage({
           expires_at,
           read_at,
           image_data,
+          image_url,
           image_mime,
           image_name,
           image_size,
@@ -1362,7 +1653,8 @@ async function addMessage({
           $1, $2, $3, $4, $5,
           $6, $7, $8, $9, $10,
           $11, $12, $13, $14, $15,
-          $16, $17, $18, $19, $20
+          $16, $17, $18, $19, $20,
+          $21, $22
         )
       `,
       [
@@ -1373,6 +1665,7 @@ async function addMessage({
         message.recipientUsername,
         message.kind,
         message.attachment ? message.attachment.data : null,
+        message.attachment ? message.attachment.url : null,
         message.attachment ? message.attachment.mime : null,
         message.attachment ? message.attachment.name : null,
         message.attachment ? message.attachment.size : null,
@@ -1382,6 +1675,7 @@ async function addMessage({
         message.expiresAt,
         message.readAt,
         message.image ? message.image.data : null,
+        message.image ? message.image.url : null,
         message.image ? message.image.mime : null,
         message.image ? message.image.name : null,
         message.image ? message.image.size : null,
@@ -1416,6 +1710,7 @@ async function findAccessibleMessage(id, username) {
           recipient_username AS "recipientUsername",
           kind,
           attachment_data AS "attachmentData",
+          attachment_url AS "attachmentUrl",
           attachment_mime AS "attachmentMime",
           attachment_name AS "attachmentName",
           attachment_size AS "attachmentSize",
@@ -1590,6 +1885,7 @@ async function listStarredMessages(username, options = {}) {
               recipient_username AS "recipientUsername",
               kind,
               attachment_data AS "attachmentData",
+              attachment_url AS "attachmentUrl",
               attachment_mime AS "attachmentMime",
               attachment_name AS "attachmentName",
               attachment_size AS "attachmentSize",
@@ -1641,6 +1937,867 @@ async function deleteMessage(id, username) {
     return true;
   });
 }
+
+async function cleanupAnalyticsLogs() {
+  const retentionDays = Math.max(7, Number(process.env.ANALYTICS_RETENTION_DAYS || 45));
+
+  if (usePostgres) {
+    await pool.query(
+      `
+        DELETE FROM audit_logs
+        WHERE table_name IN ('messages', 'media', 'message_media', 'attachments')
+          AND UPPER(action) <> 'DELETE'
+      `
+    );
+    await pool.query("DELETE FROM audit_logs WHERE created_at < NOW() - ($1::text || ' days')::interval", [
+      retentionDays
+    ]);
+    await pool.query(
+      "DELETE FROM login_history WHERE created_at < NOW() - ($1::text || ' days')::interval",
+      [retentionDays]
+    );
+    await pool.query(
+      "DELETE FROM admin_action_logs WHERE created_at < NOW() - ($1::text || ' days')::interval",
+      [retentionDays]
+    );
+    await pool.query(
+      "DELETE FROM user_activity_sessions WHERE is_active = false AND created_at < NOW() - ($1::text || ' days')::interval",
+      [retentionDays]
+    );
+    return;
+  }
+
+  await queuedWrite(async () => {
+    const store = await readJsonStore(false);
+    const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+    store.loginHistory = (store.loginHistory || []).filter((item) => new Date(item.createdAt).getTime() >= cutoff);
+    store.adminActionLogs = (store.adminActionLogs || []).filter((item) => new Date(item.createdAt).getTime() >= cutoff);
+    store.activitySessions = (store.activitySessions || []).filter(
+      (item) => item.isActive || new Date(item.createdAt).getTime() >= cutoff
+    );
+    await writeJsonStore(store);
+  });
+}
+
+async function markStaleUsersOffline() {
+  if (usePostgres) {
+    await initStore();
+    await pool.query(
+      `
+        UPDATE inbox_users
+        SET is_online = false,
+            logout_time = COALESCE(logout_time, last_seen),
+            session_duration_seconds = GREATEST(
+              session_duration_seconds,
+              COALESCE(EXTRACT(EPOCH FROM (last_seen - login_time))::integer, session_duration_seconds)
+            )
+        WHERE is_online = true
+          AND last_seen < NOW() - INTERVAL '2 minutes'
+      `
+    );
+    await pool.query(
+      `
+        UPDATE user_activity_sessions
+        SET is_active = false,
+            logout_time = COALESCE(logout_time, last_seen),
+            duration_seconds = GREATEST(
+              duration_seconds,
+              COALESCE(EXTRACT(EPOCH FROM (last_seen - login_time))::integer, duration_seconds)
+            )
+        WHERE is_active = true
+          AND last_seen < NOW() - INTERVAL '2 minutes'
+      `
+    );
+  }
+}
+
+async function recordLoginAttempt({ username, success, reason = "", suspicious = false, suspiciousReason = "", sessionId = "", context = {} }) {
+  const normalizedUsername = normalizeUsername(username);
+  const activity = normalizeActivityContext(context);
+  const item = normalizeLoginRecord({
+    id: crypto.randomUUID(),
+    username: normalizedUsername,
+    success,
+    reason,
+    suspicious,
+    suspiciousReason,
+    sessionId,
+    ...activity,
+    createdAt: new Date().toISOString()
+  });
+
+  if (usePostgres) {
+    await initStore();
+    await pool.query(
+      `
+        INSERT INTO login_history (
+          id, username, success, reason, suspicious, suspicious_reason, session_id,
+          ip_address, country, state, city, location_timezone, isp, vpn_proxy,
+          device_type, operating_system, browser, browser_version, user_agent, created_at
+        )
+        VALUES (
+          $1, $2, $3, $4, $5, $6, $7,
+          $8, $9, $10, $11, $12, $13, $14,
+          $15, $16, $17, $18, $19, $20
+        )
+      `,
+      [
+        item.id,
+        item.username,
+        item.success,
+        item.reason,
+        item.suspicious,
+        item.suspiciousReason,
+        item.sessionId,
+        item.ipAddress,
+        item.country,
+        item.state,
+        item.city,
+        item.locationTimezone,
+        item.isp,
+        item.vpnProxy,
+        item.deviceType,
+        item.operatingSystem,
+        item.browser,
+        item.browserVersion,
+        item.userAgent,
+        item.createdAt
+      ]
+    );
+    return item;
+  }
+
+  return queuedWrite(async () => {
+    const store = await readJsonStore();
+    store.loginHistory = [item, ...(store.loginHistory || [])].slice(0, 1000);
+    await writeJsonStore(store);
+    return item;
+  });
+}
+
+async function detectSuspiciousLogin(username, context = {}) {
+  const normalizedUsername = normalizeUsername(username);
+  const activity = normalizeActivityContext(context);
+  const reasons = [];
+
+  if (!normalizedUsername) {
+    return { suspicious: false, reason: "" };
+  }
+
+  if (activity.vpnProxy === true) {
+    reasons.push("VPN/proxy network");
+  }
+
+  if (usePostgres) {
+    await initStore();
+    const failed = await pool.query(
+      `
+        SELECT COUNT(*)::integer AS count
+        FROM login_history
+        WHERE username = $1
+          AND success = false
+          AND created_at > NOW() - INTERVAL '15 minutes'
+      `,
+      [normalizedUsername]
+    );
+    const lastSuccess = await pool.query(
+      `
+        SELECT country, device_type, browser
+        FROM login_history
+        WHERE username = $1 AND success = true
+        ORDER BY created_at DESC
+        LIMIT 1
+      `,
+      [normalizedUsername]
+    );
+
+    if (Number(failed.rows[0] && failed.rows[0].count) >= 5) {
+      reasons.push("Many failed login attempts");
+    }
+
+    const previous = lastSuccess.rows[0];
+    if (previous) {
+      if (activity.country && previous.country && activity.country !== previous.country) {
+        reasons.push("New country");
+      }
+      if (activity.deviceType && previous.device_type && activity.deviceType !== previous.device_type) {
+        reasons.push("New device type");
+      }
+    }
+  } else {
+    const store = await readJsonStore();
+    const cutoff = Date.now() - 15 * 60 * 1000;
+    const recentFailures = (store.loginHistory || []).filter(
+      (item) =>
+        item.username === normalizedUsername &&
+        !item.success &&
+        new Date(item.createdAt).getTime() >= cutoff
+    );
+    const previous = (store.loginHistory || []).find(
+      (item) => item.username === normalizedUsername && item.success
+    );
+
+    if (recentFailures.length >= 5) {
+      reasons.push("Many failed login attempts");
+    }
+    if (previous && activity.country && previous.country && activity.country !== previous.country) {
+      reasons.push("New country");
+    }
+  }
+
+  return {
+    suspicious: reasons.length > 0,
+    reason: reasons.join(", ")
+  };
+}
+
+async function startUserSession(username, sessionId, context = {}) {
+  const normalizedUsername = normalizeUsername(username);
+  const activity = normalizeActivityContext(context);
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+
+  if (!normalizedUsername || !sessionId) {
+    return null;
+  }
+
+  if (usePostgres) {
+    await initStore();
+    const client = await pool.connect();
+
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `
+          UPDATE user_activity_sessions
+          SET is_active = false,
+              logout_time = COALESCE(logout_time, NOW()),
+              duration_seconds = GREATEST(duration_seconds, COALESCE(EXTRACT(EPOCH FROM (NOW() - login_time))::integer, duration_seconds))
+          WHERE username = $1 AND session_id = $2 AND is_active = true
+        `,
+        [normalizedUsername, sessionId]
+      );
+      await client.query(
+        `
+          INSERT INTO user_activity_sessions (
+            id, username, session_id, login_time, last_seen, is_active,
+            ip_address, country, state, city, location_timezone, isp, vpn_proxy,
+            device_type, operating_system, browser, browser_version, user_agent,
+            screen_width, screen_height, device_pixel_ratio, language, client_timezone, online_state
+          )
+          VALUES (
+            $1, $2, $3, NOW(), NOW(), true,
+            $4, $5, $6, $7, $8, $9, $10,
+            $11, $12, $13, $14, $15,
+            $16, $17, $18, $19, $20, $21
+          )
+        `,
+        [
+          id,
+          normalizedUsername,
+          sessionId,
+          activity.ipAddress,
+          activity.country,
+          activity.state,
+          activity.city,
+          activity.locationTimezone,
+          activity.isp,
+          activity.vpnProxy,
+          activity.deviceType,
+          activity.operatingSystem,
+          activity.browser,
+          activity.browserVersion,
+          activity.userAgent,
+          activity.screenWidth,
+          activity.screenHeight,
+          activity.devicePixelRatio,
+          activity.language,
+          activity.clientTimezone,
+          activity.onlineState
+        ]
+      );
+      await client.query(
+        `
+          UPDATE inbox_users
+          SET is_online = true,
+              last_seen = NOW(),
+              login_time = NOW(),
+              logout_time = NULL,
+              current_session_id = $2,
+              session_duration_seconds = 0
+          WHERE username = $1
+        `,
+        [normalizedUsername, sessionId]
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  } else {
+    await queuedWrite(async () => {
+      const store = await readJsonStore();
+      for (const session of store.activitySessions || []) {
+        if (session.username === normalizedUsername && session.sessionId === sessionId && session.isActive) {
+          session.isActive = false;
+          session.logoutTime = now;
+          session.durationSeconds = Math.max(0, Math.round((new Date(now) - new Date(session.loginTime)) / 1000));
+        }
+      }
+      store.activitySessions = [
+        {
+          id,
+          username: normalizedUsername,
+          sessionId,
+          loginTime: now,
+          lastSeen: now,
+          logoutTime: null,
+          durationSeconds: 0,
+          isActive: true,
+          ...activity
+        },
+        ...(store.activitySessions || [])
+      ].slice(0, 1000);
+      const user = store.users.find((item) => item.username === normalizedUsername);
+      if (user) {
+        user.isOnline = true;
+        user.lastSeen = now;
+        user.loginTime = now;
+        user.logoutTime = null;
+        user.currentSessionId = sessionId;
+        user.sessionDurationSeconds = 0;
+      }
+      await writeJsonStore(store);
+    });
+  }
+
+  return { id, username: normalizedUsername, sessionId, loginTime: now };
+}
+
+async function heartbeatUserSession(username, sessionId, context = {}) {
+  const normalizedUsername = normalizeUsername(username);
+  const activity = normalizeActivityContext(context);
+  const now = new Date().toISOString();
+
+  if (!normalizedUsername || !sessionId) {
+    return false;
+  }
+
+  if (usePostgres) {
+    await initStore();
+    await pool.query(
+      `
+        UPDATE user_activity_sessions
+        SET last_seen = NOW(),
+            duration_seconds = GREATEST(duration_seconds, COALESCE(EXTRACT(EPOCH FROM (NOW() - login_time))::integer, duration_seconds)),
+            is_active = true,
+            screen_width = COALESCE($3, screen_width),
+            screen_height = COALESCE($4, screen_height),
+            device_pixel_ratio = COALESCE($5, device_pixel_ratio),
+            language = COALESCE(NULLIF($6, ''), language),
+            client_timezone = COALESCE(NULLIF($7, ''), client_timezone),
+            online_state = COALESCE($8, online_state)
+        WHERE username = $1 AND session_id = $2
+      `,
+      [
+        normalizedUsername,
+        sessionId,
+        activity.screenWidth,
+        activity.screenHeight,
+        activity.devicePixelRatio,
+        activity.language,
+        activity.clientTimezone,
+        activity.onlineState
+      ]
+    );
+    await pool.query(
+      `
+        UPDATE inbox_users
+        SET is_online = true,
+            last_seen = NOW(),
+            current_session_id = $2,
+            session_duration_seconds = GREATEST(session_duration_seconds, COALESCE(EXTRACT(EPOCH FROM (NOW() - login_time))::integer, session_duration_seconds))
+        WHERE username = $1
+      `,
+      [normalizedUsername, sessionId]
+    );
+    return true;
+  }
+
+  return queuedWrite(async () => {
+    const store = await readJsonStore();
+    const session = (store.activitySessions || []).find(
+      (item) => item.username === normalizedUsername && item.sessionId === sessionId && item.isActive
+    );
+
+    if (session) {
+      session.lastSeen = now;
+      session.durationSeconds = Math.max(0, Math.round((new Date(now) - new Date(session.loginTime)) / 1000));
+      Object.assign(session, Object.fromEntries(Object.entries(activity).filter(([, value]) => value !== null && value !== "")));
+    }
+
+    const user = store.users.find((item) => item.username === normalizedUsername);
+    if (user) {
+      user.isOnline = true;
+      user.lastSeen = now;
+      user.currentSessionId = sessionId;
+      if (user.loginTime) {
+        user.sessionDurationSeconds = Math.max(0, Math.round((new Date(now) - new Date(user.loginTime)) / 1000));
+      }
+    }
+
+    await writeJsonStore(store);
+    return true;
+  });
+}
+
+async function endUserSession(username, sessionId) {
+  const normalizedUsername = normalizeUsername(username);
+  const now = new Date().toISOString();
+
+  if (!normalizedUsername) {
+    return false;
+  }
+
+  if (usePostgres) {
+    await initStore();
+    await pool.query(
+      `
+        UPDATE user_activity_sessions
+        SET is_active = false,
+            logout_time = NOW(),
+            last_seen = NOW(),
+            duration_seconds = GREATEST(duration_seconds, COALESCE(EXTRACT(EPOCH FROM (NOW() - login_time))::integer, duration_seconds))
+        WHERE username = $1
+          AND ($2 = '' OR session_id = $2)
+          AND is_active = true
+      `,
+      [normalizedUsername, sessionId || ""]
+    );
+    await pool.query(
+      `
+        UPDATE inbox_users
+        SET is_online = false,
+            last_seen = NOW(),
+            logout_time = NOW(),
+            session_duration_seconds = GREATEST(session_duration_seconds, COALESCE(EXTRACT(EPOCH FROM (NOW() - login_time))::integer, session_duration_seconds))
+        WHERE username = $1
+      `,
+      [normalizedUsername]
+    );
+    return true;
+  }
+
+  return queuedWrite(async () => {
+    const store = await readJsonStore();
+    for (const session of store.activitySessions || []) {
+      if (session.username === normalizedUsername && (!sessionId || session.sessionId === sessionId) && session.isActive) {
+        session.isActive = false;
+        session.logoutTime = now;
+        session.lastSeen = now;
+        session.durationSeconds = Math.max(0, Math.round((new Date(now) - new Date(session.loginTime)) / 1000));
+      }
+    }
+    const user = store.users.find((item) => item.username === normalizedUsername);
+    if (user) {
+      user.isOnline = false;
+      user.lastSeen = now;
+      user.logoutTime = now;
+      if (user.loginTime) {
+        user.sessionDurationSeconds = Math.max(0, Math.round((new Date(now) - new Date(user.loginTime)) / 1000));
+      }
+    }
+    await writeJsonStore(store);
+    return true;
+  });
+}
+
+async function logAdminAction({ adminUsername, action, targetUsername = "", details = {}, ipAddress = "" }) {
+  const item = normalizeAdminAction({
+    id: crypto.randomUUID(),
+    adminUsername,
+    action: String(action || "").slice(0, 120),
+    targetUsername,
+    details,
+    ipAddress,
+    createdAt: new Date().toISOString()
+  });
+
+  if (!item.adminUsername || !item.action) {
+    return null;
+  }
+
+  if (usePostgres) {
+    await initStore();
+    await pool.query(
+      `
+        INSERT INTO admin_action_logs (id, admin_username, action, target_username, details, ip_address, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `,
+      [
+        item.id,
+        item.adminUsername,
+        item.action,
+        item.targetUsername,
+        JSON.stringify(item.details || {}),
+        item.ipAddress,
+        item.createdAt
+      ]
+    );
+    return item;
+  }
+
+  return queuedWrite(async () => {
+    const store = await readJsonStore();
+    store.adminActionLogs = [item, ...(store.adminActionLogs || [])].slice(0, 1000);
+    await writeJsonStore(store);
+    return item;
+  });
+}
+
+async function updateUserSecurityStatus(username, updates = {}) {
+  const normalizedUsername = normalizeUsername(username);
+  const allowedStatuses = new Set(["active", "blocked", "suspended"]);
+  const accountStatus = allowedStatuses.has(String(updates.accountStatus || "")) ? updates.accountStatus : "active";
+  const isShadowBanned = Boolean(updates.isShadowBanned);
+  const blockedReason = String(updates.blockedReason || "").slice(0, 240);
+  const suspendedUntil = updates.suspendedUntil ? new Date(updates.suspendedUntil) : null;
+  const suspendedUntilIso =
+    suspendedUntil && !Number.isNaN(suspendedUntil.getTime()) ? suspendedUntil.toISOString() : null;
+
+  if (!normalizedUsername) {
+    return null;
+  }
+
+  if (usePostgres) {
+    await initStore();
+    const result = await pool.query(
+      `
+        UPDATE inbox_users
+        SET account_status = $2,
+            is_shadow_banned = $3,
+            suspended_until = $4,
+            blocked_reason = $5,
+            blocked_at = CASE WHEN $2 IN ('blocked', 'suspended') THEN COALESCE(blocked_at, NOW()) ELSE NULL END
+        WHERE username = $1
+        RETURNING
+          username,
+          display_name AS "displayName",
+          role,
+          bio,
+          profile_image_url AS "profileImageUrl",
+          profile_image_mime AS "profileImageMime",
+          profile_image_name AS "profileImageName",
+          (profile_image_mime <> '' OR profile_image_url <> '') AS "hasProfileImage",
+          anonymous_mode AS "anonymousMode",
+          is_online AS "isOnline",
+          last_seen AS "lastSeen",
+          login_time AS "loginTime",
+          logout_time AS "logoutTime",
+          current_session_id AS "currentSessionId",
+          session_duration_seconds AS "sessionDurationSeconds",
+          account_status AS "accountStatus",
+          is_shadow_banned AS "isShadowBanned",
+          suspended_until AS "suspendedUntil",
+          blocked_at AS "blockedAt",
+          blocked_reason AS "blockedReason",
+          created_at AS "createdAt"
+      `,
+      [normalizedUsername, accountStatus, isShadowBanned, suspendedUntilIso, blockedReason]
+    );
+    return result.rows[0] ? normalizeUser(result.rows[0]) : null;
+  }
+
+  return queuedWrite(async () => {
+    const store = await readJsonStore();
+    const user = store.users.find((item) => item.username === normalizedUsername);
+    if (!user) return null;
+    user.accountStatus = accountStatus;
+    user.isShadowBanned = isShadowBanned;
+    user.suspendedUntil = suspendedUntilIso;
+    user.blockedReason = blockedReason;
+    user.blockedAt = accountStatus === "active" ? null : user.blockedAt || new Date().toISOString();
+    await writeJsonStore(store);
+    return normalizeUser(user);
+  });
+}
+
+async function listUserLoginHistory(username, options = {}) {
+  const normalizedUsername = normalizeUsername(username);
+  const limit = clampLimit(options.limit, 50, 200);
+
+  if (usePostgres) {
+    await initStore();
+    const result = await pool.query(
+      `
+        SELECT
+          id,
+          username,
+          success,
+          reason,
+          suspicious,
+          suspicious_reason AS "suspiciousReason",
+          session_id AS "sessionId",
+          ip_address AS "ipAddress",
+          country,
+          state,
+          city,
+          location_timezone AS "locationTimezone",
+          isp,
+          vpn_proxy AS "vpnProxy",
+          device_type AS "deviceType",
+          operating_system AS "operatingSystem",
+          browser,
+          browser_version AS "browserVersion",
+          user_agent AS "userAgent",
+          created_at AS "createdAt"
+        FROM login_history
+        WHERE username = $1
+        ORDER BY created_at DESC
+        LIMIT $2
+      `,
+      [normalizedUsername, limit]
+    );
+    return result.rows.map(normalizeLoginRecord);
+  }
+
+  const store = await readJsonStore();
+  return (store.loginHistory || [])
+    .filter((item) => normalizeUsername(item.username) === normalizedUsername)
+    .slice(0, limit)
+    .map(normalizeLoginRecord);
+}
+
+async function listAdminActionLogs(options = {}) {
+  const limit = clampLimit(options.limit, 50, 200);
+
+  if (usePostgres) {
+    await initStore();
+    const result = await pool.query(
+      `
+        SELECT
+          id,
+          admin_username AS "adminUsername",
+          action,
+          target_username AS "targetUsername",
+          details,
+          ip_address AS "ipAddress",
+          created_at AS "createdAt"
+        FROM admin_action_logs
+        ORDER BY created_at DESC
+        LIMIT $1
+      `,
+      [limit]
+    );
+    return result.rows.map(normalizeAdminAction);
+  }
+
+  const store = await readJsonStore();
+  return (store.adminActionLogs || []).slice(0, limit).map(normalizeAdminAction);
+}
+
+async function getUltimateAdminMonitoring(options = {}) {
+  const limit = clampLimit(options.limit, 80, 200);
+  await markStaleUsersOffline();
+
+  if (usePostgres) {
+    await initStore();
+    const [usersResult, sessionsResult, loginsResult, suspiciousResult, actionsResult] = await Promise.all([
+      pool.query(
+        `
+          SELECT
+            username,
+            display_name AS "displayName",
+            role,
+            bio,
+            profile_image_url AS "profileImageUrl",
+            profile_image_mime AS "profileImageMime",
+            profile_image_name AS "profileImageName",
+            (profile_image_mime <> '' OR profile_image_url <> '') AS "hasProfileImage",
+            anonymous_mode AS "anonymousMode",
+            is_online AS "isOnline",
+            last_seen AS "lastSeen",
+            login_time AS "loginTime",
+            logout_time AS "logoutTime",
+            current_session_id AS "currentSessionId",
+            session_duration_seconds AS "sessionDurationSeconds",
+            account_status AS "accountStatus",
+            is_shadow_banned AS "isShadowBanned",
+            suspended_until AS "suspendedUntil",
+            blocked_at AS "blockedAt",
+            blocked_reason AS "blockedReason",
+            created_at AS "createdAt"
+          FROM inbox_users
+          ORDER BY is_online DESC, last_seen DESC NULLS LAST, display_name ASC
+          LIMIT $1
+        `,
+        [limit]
+      ),
+      pool.query(
+        `
+          SELECT DISTINCT ON (username)
+            id,
+            username,
+            session_id AS "sessionId",
+            login_time AS "loginTime",
+            logout_time AS "logoutTime",
+            last_seen AS "lastSeen",
+            duration_seconds AS "durationSeconds",
+            is_active AS "isActive",
+            ip_address AS "ipAddress",
+            country,
+            state,
+            city,
+            location_timezone AS "locationTimezone",
+            isp,
+            vpn_proxy AS "vpnProxy",
+            device_type AS "deviceType",
+            operating_system AS "operatingSystem",
+            browser,
+            browser_version AS "browserVersion",
+            user_agent AS "userAgent",
+            screen_width AS "screenWidth",
+            screen_height AS "screenHeight",
+            device_pixel_ratio AS "devicePixelRatio",
+            language,
+            client_timezone AS "clientTimezone",
+            online_state AS "onlineState",
+            created_at AS "createdAt"
+          FROM user_activity_sessions
+          ORDER BY username, last_seen DESC
+        `
+      ),
+      pool.query(
+        `
+          SELECT
+            id,
+            username,
+            success,
+            reason,
+            suspicious,
+            suspicious_reason AS "suspiciousReason",
+            session_id AS "sessionId",
+            ip_address AS "ipAddress",
+            country,
+            state,
+            city,
+            location_timezone AS "locationTimezone",
+            isp,
+            vpn_proxy AS "vpnProxy",
+            device_type AS "deviceType",
+            operating_system AS "operatingSystem",
+            browser,
+            browser_version AS "browserVersion",
+            user_agent AS "userAgent",
+            created_at AS "createdAt"
+          FROM login_history
+          ORDER BY created_at DESC
+          LIMIT 80
+        `
+      ),
+      pool.query(
+        `
+          SELECT
+            id,
+            username,
+            success,
+            reason,
+            suspicious,
+            suspicious_reason AS "suspiciousReason",
+            session_id AS "sessionId",
+            ip_address AS "ipAddress",
+            country,
+            state,
+            city,
+            location_timezone AS "locationTimezone",
+            isp,
+            vpn_proxy AS "vpnProxy",
+            device_type AS "deviceType",
+            operating_system AS "operatingSystem",
+            browser,
+            browser_version AS "browserVersion",
+            user_agent AS "userAgent",
+            created_at AS "createdAt"
+          FROM login_history
+          WHERE suspicious = true OR success = false
+          ORDER BY created_at DESC
+          LIMIT 40
+        `
+      ),
+      pool.query(
+        `
+          SELECT
+            id,
+            admin_username AS "adminUsername",
+            action,
+            target_username AS "targetUsername",
+            details,
+            ip_address AS "ipAddress",
+            created_at AS "createdAt"
+          FROM admin_action_logs
+          ORDER BY created_at DESC
+          LIMIT 40
+        `
+      )
+    ]);
+
+    const sessionsByUser = new Map(
+      sessionsResult.rows.map((row) => [normalizeUsername(row.username), normalizeSessionRecord(row)])
+    );
+    const users = usersResult.rows.map((row) => {
+      const user = normalizeUser(row);
+      return {
+        ...user,
+        session: sessionsByUser.get(user.username) || null
+      };
+    });
+
+    return {
+      generatedAt: new Date().toISOString(),
+      stats: {
+        totalUsers: users.length,
+        onlineUsers: users.filter((user) => user.isOnline).length,
+        anonymousOnlineUsers: users.filter((user) => user.isOnline && user.anonymousMode).length,
+        blockedUsers: users.filter((user) => user.accountStatus === "blocked" || user.accountStatus === "suspended").length,
+        suspiciousEvents: suspiciousResult.rowCount
+      },
+      users,
+      loginHistory: loginsResult.rows.map(normalizeLoginRecord),
+      suspicious: suspiciousResult.rows.map(normalizeLoginRecord),
+      adminActions: actionsResult.rows.map(normalizeAdminAction)
+    };
+  }
+
+  const store = await readJsonStore();
+  const sessionsByUser = new Map(
+    (store.activitySessions || []).map(normalizeSessionRecord).map((session) => [session.username, session])
+  );
+  const users = store.users
+    .map(normalizeUser)
+    .sort((a, b) => Number(b.isOnline) - Number(a.isOnline) || String(b.lastSeen || "").localeCompare(String(a.lastSeen || "")))
+    .slice(0, limit)
+    .map((user) => ({ ...user, session: sessionsByUser.get(user.username) || null }));
+  const loginHistory = (store.loginHistory || []).map(normalizeLoginRecord).slice(0, 80);
+  const suspicious = loginHistory.filter((item) => item.suspicious || !item.success).slice(0, 40);
+
+  return {
+    generatedAt: new Date().toISOString(),
+    stats: {
+      totalUsers: users.length,
+      onlineUsers: users.filter((user) => user.isOnline).length,
+      anonymousOnlineUsers: users.filter((user) => user.isOnline && user.anonymousMode).length,
+      blockedUsers: users.filter((user) => user.accountStatus === "blocked" || user.accountStatus === "suspended").length,
+      suspiciousEvents: suspicious.length
+    },
+    users,
+    loginHistory,
+    suspicious,
+    adminActions: (store.adminActionLogs || []).map(normalizeAdminAction).slice(0, 40)
+  };
+}
+
 async function updateUserOnlineStatus(username, isOnline) {
   const normalizedUsername = normalizeUsername(username);
 
@@ -1667,21 +2824,33 @@ module.exports = {
   addMessage,
   authenticateUser,
   cleanupExpiredMessages,
+  cleanupAnalyticsLogs,
   deleteMessage,
+  detectSuspiciousLogin,
+  endUserSession,
   findUser,
   findAccessibleMessage,
   getUserAvatar,
+  getUltimateAdminMonitoring,
   initStore,
   listChatSummaries,
   listConversationMessages,
+  listAdminActionLogs,
   listLetterMessages,
   listMessagesForUser,
   listStarredMessages,
+  listUserLoginHistory,
+  logAdminAction,
   listUsers,
   markConversationRead,
+  markStaleUsersOffline,
   normalizeUsername,
+  heartbeatUserSession,
+  recordLoginAttempt,
+  startUserSession,
   toggleMessageReaction,
   toggleMessageStar,
+  updateUserSecurityStatus,
   updateUserAvatar,
   updateUserPassword,
   updateUserProfile,

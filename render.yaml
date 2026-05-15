@@ -22,6 +22,10 @@ services:
         sync: false
       - key: ACCOUNT_USERS
         sync: false
+      - key: CLOUDINARY_URL
+        sync: false
+      - key: ANALYTICS_RETENTION_DAYS
+        value: "45"
 
 databases:
   - name: foryou-db
