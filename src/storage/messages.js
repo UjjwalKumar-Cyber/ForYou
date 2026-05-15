@@ -484,6 +484,36 @@ async function setupPostgresStore() {
   `);
 
   await pool.query(`
+    ALTER TABLE user_activity_sessions
+    ADD COLUMN IF NOT EXISTS username TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS session_id TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS login_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ADD COLUMN IF NOT EXISTS logout_time TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ADD COLUMN IF NOT EXISTS duration_seconds INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true,
+    ADD COLUMN IF NOT EXISTS ip_address TEXT,
+    ADD COLUMN IF NOT EXISTS country TEXT,
+    ADD COLUMN IF NOT EXISTS state TEXT,
+    ADD COLUMN IF NOT EXISTS city TEXT,
+    ADD COLUMN IF NOT EXISTS location_timezone TEXT,
+    ADD COLUMN IF NOT EXISTS isp TEXT,
+    ADD COLUMN IF NOT EXISTS vpn_proxy BOOLEAN,
+    ADD COLUMN IF NOT EXISTS device_type TEXT,
+    ADD COLUMN IF NOT EXISTS operating_system TEXT,
+    ADD COLUMN IF NOT EXISTS browser TEXT,
+    ADD COLUMN IF NOT EXISTS browser_version TEXT,
+    ADD COLUMN IF NOT EXISTS user_agent TEXT,
+    ADD COLUMN IF NOT EXISTS screen_width INTEGER,
+    ADD COLUMN IF NOT EXISTS screen_height INTEGER,
+    ADD COLUMN IF NOT EXISTS device_pixel_ratio NUMERIC,
+    ADD COLUMN IF NOT EXISTS language TEXT,
+    ADD COLUMN IF NOT EXISTS client_timezone TEXT,
+    ADD COLUMN IF NOT EXISTS online_state BOOLEAN,
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS login_history (
       id UUID PRIMARY KEY,
       username TEXT NOT NULL,
@@ -509,6 +539,29 @@ async function setupPostgresStore() {
   `);
 
   await pool.query(`
+    ALTER TABLE login_history
+    ADD COLUMN IF NOT EXISTS username TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS success BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS reason TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS suspicious BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS suspicious_reason TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS session_id TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS ip_address TEXT,
+    ADD COLUMN IF NOT EXISTS country TEXT,
+    ADD COLUMN IF NOT EXISTS state TEXT,
+    ADD COLUMN IF NOT EXISTS city TEXT,
+    ADD COLUMN IF NOT EXISTS location_timezone TEXT,
+    ADD COLUMN IF NOT EXISTS isp TEXT,
+    ADD COLUMN IF NOT EXISTS vpn_proxy BOOLEAN,
+    ADD COLUMN IF NOT EXISTS device_type TEXT,
+    ADD COLUMN IF NOT EXISTS operating_system TEXT,
+    ADD COLUMN IF NOT EXISTS browser TEXT,
+    ADD COLUMN IF NOT EXISTS browser_version TEXT,
+    ADD COLUMN IF NOT EXISTS user_agent TEXT,
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS admin_action_logs (
       id UUID PRIMARY KEY,
       admin_username TEXT NOT NULL,
@@ -521,6 +574,16 @@ async function setupPostgresStore() {
   `);
 
   await pool.query(`
+    ALTER TABLE admin_action_logs
+    ADD COLUMN IF NOT EXISTS admin_username TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS action TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS target_username TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS details TEXT NOT NULL DEFAULT '{}',
+    ADD COLUMN IF NOT EXISTS ip_address TEXT,
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS audit_logs (
       id BIGSERIAL PRIMARY KEY,
       table_name TEXT NOT NULL,
@@ -529,6 +592,15 @@ async function setupPostgresStore() {
       details TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )
+  `);
+
+  await pool.query(`
+    ALTER TABLE audit_logs
+    ADD COLUMN IF NOT EXISTS table_name TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS action TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS row_id TEXT,
+    ADD COLUMN IF NOT EXISTS details TEXT,
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now()
   `);
 
   await pool.query("CREATE INDEX IF NOT EXISTS idx_inbox_users_username ON inbox_users (username)");
