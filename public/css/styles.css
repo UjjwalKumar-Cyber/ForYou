@@ -284,8 +284,7 @@ textarea:focus-visible {
   right: 0;
   bottom: 0;
   z-index: 31;
-  display: grid;
-  align-content: start;
+  display: block;
   width: min(86vw, 340px);
   height: 100dvh;
   max-height: 100dvh;
@@ -294,13 +293,24 @@ textarea:focus-visible {
     linear-gradient(180deg, rgba(255, 111, 159, 0.12), transparent 32%),
     rgba(21, 14, 24, 0.98);
   box-shadow: -22px 0 50px rgba(0, 0, 0, 0.42);
-  overflow-y: auto;
+  overflow: hidden;
+  padding: 0;
+  animation: drawerIn var(--motion-medium) var(--ease-soft) both;
+}
+
+.drawer-scroll {
+  display: grid;
+  align-content: start;
+  gap: 0;
+  height: 100%;
+  max-height: 100%;
+  overflow-x: hidden;
+  overflow-y: scroll;
   overscroll-behavior-y: contain;
-  padding: 24px 24px max(28px, env(safe-area-inset-bottom));
+  padding: 24px 24px max(96px, env(safe-area-inset-bottom));
   scrollbar-gutter: stable;
   touch-action: pan-y;
   -webkit-overflow-scrolling: touch;
-  animation: drawerIn var(--motion-medium) var(--ease-soft) both;
 }
 
 .peer-profile-panel {
