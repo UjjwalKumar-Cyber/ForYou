@@ -17,30 +17,38 @@ const { Server } = require("socket.io");
 const {
   addMessage,
   authenticateUser,
+  countActiveNotifications,
   cleanupAnalyticsLogs,
   cleanupExpiredMessages,
+  createNotificationAlert,
   deleteMessage,
+  deleteNotificationAlert,
   detectSuspiciousLogin,
   endUserSession,
+  findNotificationAlert,
   findUser,
   findAccessibleMessage,
   getUltimateAdminMonitoring,
   getUserAvatar,
   heartbeatUserSession,
   initStore,
+  listNotificationHistory,
   listUserLoginHistory,
   listChatSummaries,
   listConversationMessages,
   listLetterMessages,
   listMessagesForUser,
+  listNotificationsForUser,
   listStarredMessages,
   listUsers,
   logAdminAction,
   markConversationRead,
+  markNotificationsRead,
   markStaleUsersOffline,
   normalizeUsername,
   recordLoginAttempt,
   startUserSession,
+  subscribeNotificationAlerts,
   toggleMessageReaction,
   toggleMessageStar,
   updateUserSecurityStatus,
@@ -625,13 +633,18 @@ function updateSocketPresence(user, delta) {
     lastActiveAt: Date.now(),
     socketCount: 0
   };
+  const nextSocketCount = Math.max(0, Number(existing.socketCount || 0) + delta);
+
+  if (!activeUsers.has(username) && delta < 0) {
+    return;
+  }
 
   activeUsers.set(username, {
     username,
     role: user.role || existing.role || "user",
     anonymousMode: Boolean(user.anonymousMode || user.hideActiveStatus),
     lastActiveAt: Date.now(),
-    socketCount: Math.max(0, Number(existing.socketCount || 0) + delta)
+    socketCount: nextSocketCount
   });
 }
 
@@ -982,6 +995,59 @@ function scheduleAdminMonitoringUpdate() {
   }, 400);
 }
 
+function publicNotification(notification) {
+  return {
+    id: String(notification.id || ""),
+    title: notification.title || "ForyoU notice",
+    message: notification.message || "",
+    type: notification.type || "info",
+    createdAt: notification.createdAt || notification.created_at || new Date().toISOString(),
+    expiresAt: notification.expiresAt || notification.expires_at || null,
+    sentBy: notification.sentBy || notification.sent_by || ""
+  };
+}
+
+function isNotificationDeliverable(notification) {
+  if (!notification || notification.seen) {
+    return false;
+  }
+
+  if (!notification.expiresAt) {
+    return true;
+  }
+
+  return new Date(notification.expiresAt).getTime() > Date.now();
+}
+
+function emitNotificationAlert(notification) {
+  if (!isNotificationDeliverable(notification)) {
+    return;
+  }
+
+  io.to(userRoom(notification.recipientUsername)).emit("notification:alert", {
+    notification: publicNotification(notification)
+  });
+  io.to(ADMIN_ROOM).emit("admin:monitoring-dirty", {
+    generatedAt: new Date().toISOString()
+  });
+}
+
+async function deliverPendingNotifications(username) {
+  try {
+    const notifications = await listNotificationsForUser(username, { limit: 20 });
+
+    if (!notifications.length) {
+      return;
+    }
+
+    io.to(userRoom(username)).emit("notification:batch", {
+      notifications: notifications.map(publicNotification)
+    });
+  } catch (error) {
+    console.error("Could not deliver pending notifications.", error);
+  }
+}
+
 function emitConversationUpdate(senderUsername, recipientUsername, message) {
   io.to(userRoom(senderUsername)).emit("chat:message", { message });
   io.to(userRoom(recipientUsername)).emit("chat:message", { message });
@@ -1020,6 +1086,7 @@ io.on("connection", (socket) => {
   updateSocketPresence(account, 1);
   schedulePresenceUpdate();
   scheduleAdminMonitoringUpdate();
+  deliverPendingNotifications(account.username);
 
   socket.on("chat:typing", async ({ recipientUsername, typing }) => {
     try {
@@ -1630,9 +1697,35 @@ app.get("/api/active-friends", requireAccount, async (req, res, next) => {
     noStore(res);
     const current = normalizeUsername(req.session.accountUser.username);
     const users = (await getCachedUsers())
+      .filter((user) => user.role !== "ultimate_admin" || isUltimateAdmin(req.session.accountUser))
       .map((user) => publicRecipient(user, req.session.accountUser))
       .filter((user) => user.username !== current && user.isActive);
     return res.json({ users });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get("/api/notifications", requireAccount, async (req, res, next) => {
+  try {
+    noStore(res);
+    const notifications = await listNotificationsForUser(req.session.accountUser.username, {
+      limit: req.query.limit || 30
+    });
+    return res.json({ notifications: notifications.map(publicNotification) });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post("/api/notifications/read", requireAccount, analyticsLimiter, async (req, res, next) => {
+  try {
+    noStore(res);
+    const rawIds = req.body && (req.body.ids || req.body.id);
+    const ids = Array.isArray(rawIds) ? rawIds : rawIds ? [rawIds] : [];
+    const result = await markNotificationsRead(req.session.accountUser.username, ids);
+    scheduleAdminMonitoringUpdate();
+    return res.json({ ok: true, ...result });
   } catch (error) {
     return next(error);
   }
@@ -1647,6 +1740,121 @@ app.get("/api/admin/monitoring", requireUltimateAdmin, analyticsLimiter, async (
       notice:
         "This dashboard shows transparent security monitoring data for signed-in accounts. Anonymous Mode is still hidden from regular users."
     });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get("/api/admin/notifications", requireUltimateAdmin, analyticsLimiter, async (req, res, next) => {
+  try {
+    noStore(res);
+    const [notifications, activeCount] = await Promise.all([
+      listNotificationHistory({ limit: req.query.limit || 80 }),
+      countActiveNotifications()
+    ]);
+
+    return res.json({
+      activeCount,
+      notifications: notifications.map((notification) => ({
+        ...publicNotification(notification),
+        recipientUsername: notification.recipientUsername,
+        seen: notification.seen
+      }))
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post("/api/admin/notifications", requireUltimateAdmin, analyticsLimiter, async (req, res, next) => {
+  try {
+    noStore(res);
+
+    const allowedTypes = new Set(["info", "warning", "success", "announcement"]);
+    const title = cleanText(req.body && req.body.title).slice(0, 120);
+    const message = cleanText(req.body && req.body.message).slice(0, 1000);
+    const requestedType = String(req.body && req.body.type || "").trim().toLowerCase();
+    const type = allowedTypes.has(requestedType)
+      ? requestedType
+      : "info";
+    const broadcast = Boolean(req.body && req.body.broadcast);
+    const recipientUsername = normalizeUsername(req.body && req.body.recipientUsername);
+    const expiresAtValue = req.body && req.body.expiresAt ? new Date(req.body.expiresAt) : null;
+    const expiresAt =
+      expiresAtValue && !Number.isNaN(expiresAtValue.getTime()) ? expiresAtValue.toISOString() : null;
+
+    if (!title || !message) {
+      return res.status(400).json({ error: "Title and message are required." });
+    }
+
+    const recipients = broadcast
+      ? (await getCachedUsers()).map((user) => user.username).filter(Boolean)
+      : [recipientUsername].filter(Boolean);
+
+    if (!recipients.length) {
+      return res.status(400).json({ error: "Choose a recipient or broadcast." });
+    }
+
+    const notifications = [];
+
+    for (const recipient of recipients) {
+      const notification = await createNotificationAlert({
+        recipientUsername: recipient,
+        title,
+        message,
+        type,
+        sentBy: req.session.accountUser.username,
+        expiresAt
+      });
+
+      if (notification) {
+        notifications.push(notification);
+        emitNotificationAlert(notification);
+      }
+    }
+
+    await logAdminAction({
+      adminUsername: req.session.accountUser.username,
+      action: broadcast ? "broadcast_popup" : "send_popup",
+      targetUsername: broadcast ? "" : recipients[0],
+      details: { title, type, count: notifications.length },
+      ipAddress: getClientIp(req)
+    });
+
+    scheduleAdminMonitoringUpdate();
+    return res.status(201).json({
+      ok: true,
+      count: notifications.length,
+      notifications: notifications.map((notification) => ({
+        ...publicNotification(notification),
+        recipientUsername: notification.recipientUsername,
+        seen: notification.seen
+      }))
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.delete("/api/admin/notifications/:id", requireUltimateAdmin, analyticsLimiter, async (req, res, next) => {
+  try {
+    noStore(res);
+    const deleted = await deleteNotificationAlert(req.params.id);
+
+    if (!deleted) {
+      return res.status(404).json({ error: "Popup notification not found." });
+    }
+
+    await logAdminAction({
+      adminUsername: req.session.accountUser.username,
+      action: "delete_popup",
+      targetUsername: deleted.recipientUsername,
+      details: { notificationId: deleted.id, title: deleted.title },
+      ipAddress: getClientIp(req)
+    });
+
+    scheduleAdminMonitoringUpdate();
+    return res.json({ ok: true });
   } catch (error) {
     return next(error);
   }
@@ -1775,6 +1983,16 @@ app.use((error, req, res, next) => {
 
 initStore()
   .then(() => {
+    subscribeNotificationAlerts(async ({ id }) => {
+      const notification = await findNotificationAlert(id);
+      if (notification) {
+        emitNotificationAlert(notification);
+        scheduleAdminMonitoringUpdate();
+      }
+    }).catch((error) => {
+      console.error("Notification listener failed.", error);
+    });
+
     setInterval(() => {
       cleanupExpiredMessages().catch((error) => {
         console.error("Expired message cleanup failed.", error);

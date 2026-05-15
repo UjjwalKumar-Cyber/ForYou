@@ -8,7 +8,7 @@
     <title>ForyoU Letters</title>
     <link rel="manifest" href="/manifest.webmanifest">
     <link rel="preload" href="/assets/seal.svg" as="image" type="image/svg+xml">
-    <link rel="stylesheet" href="/css/styles.css?v=20260516-analytics">
+    <link rel="stylesheet" href="/css/styles.css?v=20260516-popups">
   </head>
   <body>
     <main class="page-shell admin-shell">
@@ -175,8 +175,28 @@
               <button class="button secondary-button compact-button" id="monitor-refresh-button" type="button">Update</button>
             </div>
 
+            <p class="drawer-label">Popup alerts</p>
+            <form class="notification-admin-form" id="notification-form">
+              <select class="text-input compact-input" id="notification-recipient" aria-label="Popup recipient">
+                <option value="__broadcast__">Broadcast to everyone</option>
+              </select>
+              <input class="text-input compact-input" id="notification-title" type="text" maxlength="120" placeholder="Title" required>
+              <textarea class="textarea compact-textarea" id="notification-message" maxlength="1000" rows="3" placeholder="Message" required></textarea>
+              <select class="text-input compact-input" id="notification-type" aria-label="Popup type">
+                <option value="info">Info</option>
+                <option value="warning">Warning</option>
+                <option value="success">Success</option>
+                <option value="announcement">Announcement</option>
+              </select>
+              <button class="button primary-button compact-button" type="submit">Send popup</button>
+            </form>
+            <p class="form-message" id="notification-admin-status" role="status" aria-live="polite"></p>
+
             <p class="drawer-label">Live accounts</p>
             <div class="monitor-user-list" id="monitor-user-list"></div>
+
+            <p class="drawer-label">Popup history <span id="notification-active-count">0 active</span></p>
+            <div class="notification-history-list" id="notification-history-list"></div>
 
             <details class="monitor-details">
               <summary>Login and security events</summary>
@@ -191,6 +211,7 @@
             <button class="button secondary-button" id="logout-button" type="button">Logout</button>
           </div>
         </aside>
+        <div class="notification-stack" id="notification-stack" aria-live="polite"></div>
       </section>
     </main>
 
@@ -230,6 +251,6 @@
     </template>
 
     <script src="/socket.io/socket.io.js" defer></script>
-    <script src="/js/admin.js?v=20260516-analytics" defer></script>
+    <script src="/js/admin.js?v=20260516-popups" defer></script>
   </body>
 </html>

@@ -264,7 +264,10 @@ function normalizeStore(rawStore) {
     messages: Array.isArray(rawStore.messages) ? rawStore.messages.map(normalizeMessage) : [],
     activitySessions: Array.isArray(rawStore.activitySessions) ? rawStore.activitySessions : [],
     loginHistory: Array.isArray(rawStore.loginHistory) ? rawStore.loginHistory : [],
-    adminActionLogs: Array.isArray(rawStore.adminActionLogs) ? rawStore.adminActionLogs : []
+    adminActionLogs: Array.isArray(rawStore.adminActionLogs) ? rawStore.adminActionLogs : [],
+    notificationAlerts: Array.isArray(rawStore.notificationAlerts)
+      ? rawStore.notificationAlerts.map(normalizeNotification)
+      : []
   };
 }
 
@@ -362,6 +365,23 @@ function normalizeAdminAction(row = {}) {
     details: parseJsonField(row.details, {}),
     ipAddress: row.ipAddress || row.ip_address || "",
     createdAt: row.createdAt || row.created_at || new Date().toISOString()
+  };
+}
+
+function normalizeNotification(row = {}) {
+  const allowedTypes = new Set(["info", "warning", "success", "announcement"]);
+  const type = String(row.type || "info").trim().toLowerCase();
+
+  return {
+    id: String(row.id || crypto.randomUUID()),
+    recipientUsername: normalizeUsername(row.recipientUsername || row.recipient_username),
+    title: String(row.title || "ForyoU notice").slice(0, 120),
+    message: String(row.message || "").slice(0, 1000),
+    type: allowedTypes.has(type) ? type : "info",
+    createdAt: row.createdAt || row.created_at || new Date().toISOString(),
+    expiresAt: row.expiresAt || row.expires_at || null,
+    seen: Boolean(row.seen),
+    sentBy: normalizeUsername(row.sentBy || row.sent_by || "")
   };
 }
 
@@ -603,6 +623,53 @@ async function setupPostgresStore() {
     ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now()
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS notification_alerts (
+      id TEXT PRIMARY KEY DEFAULT md5(random()::text || clock_timestamp()::text),
+      recipient_username TEXT NOT NULL,
+      title TEXT NOT NULL,
+      message TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'info',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      expires_at TIMESTAMPTZ,
+      seen BOOLEAN NOT NULL DEFAULT false,
+      sent_by TEXT NOT NULL DEFAULT ''
+    )
+  `);
+
+  await pool.query(`
+    ALTER TABLE notification_alerts
+    ADD COLUMN IF NOT EXISTS recipient_username TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS title TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS message TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS type TEXT NOT NULL DEFAULT 'info',
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS seen BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS sent_by TEXT NOT NULL DEFAULT ''
+  `);
+
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION notify_notification_alert_insert()
+    RETURNS trigger AS $$
+    BEGIN
+      PERFORM pg_notify(
+        'notification_alerts_inserted',
+        json_build_object('id', NEW.id, 'recipient_username', NEW.recipient_username)::text
+      );
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql
+  `);
+
+  await pool.query("DROP TRIGGER IF EXISTS notification_alerts_insert_notify ON notification_alerts");
+  await pool.query(`
+    CREATE TRIGGER notification_alerts_insert_notify
+    AFTER INSERT ON notification_alerts
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_notification_alert_insert()
+  `);
+
   await pool.query("CREATE INDEX IF NOT EXISTS idx_inbox_users_username ON inbox_users (username)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_inbox_users_display_name ON inbox_users (display_name)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_inbox_users_is_online ON inbox_users (is_online)");
@@ -629,6 +696,11 @@ async function setupPostgresStore() {
   await pool.query("CREATE INDEX IF NOT EXISTS idx_login_history_suspicious ON login_history (suspicious, created_at DESC)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_admin_action_logs_created ON admin_action_logs (created_at DESC)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_audit_logs_table_created ON audit_logs (table_name, created_at DESC)");
+  await pool.query(
+    "CREATE INDEX IF NOT EXISTS idx_notification_alerts_recipient_seen_created ON notification_alerts (LOWER(recipient_username), seen, created_at DESC)"
+  );
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_notification_alerts_created ON notification_alerts (created_at DESC)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_notification_alerts_expires ON notification_alerts (expires_at)");
 
   await cleanupAnalyticsLogs();
 
@@ -640,6 +712,7 @@ async function setupPostgresStore() {
     await pool.query("VACUUM ANALYZE user_activity_sessions");
     await pool.query("VACUUM ANALYZE login_history");
     await pool.query("VACUUM ANALYZE admin_action_logs");
+    await pool.query("VACUUM ANALYZE notification_alerts");
   } catch (error) {
     console.warn("Postgres VACUUM ANALYZE skipped.", error.message);
   }
@@ -2870,6 +2943,346 @@ async function getUltimateAdminMonitoring(options = {}) {
   };
 }
 
+async function createNotificationAlert({
+  recipientUsername,
+  title,
+  message,
+  type = "info",
+  sentBy = "",
+  expiresAt = null
+}) {
+  const notification = normalizeNotification({
+    id: crypto.randomUUID(),
+    recipientUsername,
+    title,
+    message,
+    type,
+    sentBy,
+    expiresAt,
+    seen: false,
+    createdAt: new Date().toISOString()
+  });
+
+  if (!notification.recipientUsername || !notification.title || !notification.message) {
+    return null;
+  }
+
+  if (usePostgres) {
+    await initStore();
+    const result = await pool.query(
+      `
+        INSERT INTO notification_alerts (
+          id, recipient_username, title, message, type, created_at, expires_at, seen, sent_by
+        )
+        VALUES ($1, $2, $3, $4, $5, NOW(), $6, false, $7)
+        RETURNING
+          id,
+          recipient_username AS "recipientUsername",
+          title,
+          message,
+          type,
+          created_at AS "createdAt",
+          expires_at AS "expiresAt",
+          seen,
+          sent_by AS "sentBy"
+      `,
+      [
+        notification.id,
+        notification.recipientUsername,
+        notification.title,
+        notification.message,
+        notification.type,
+        notification.expiresAt,
+        notification.sentBy
+      ]
+    );
+
+    return normalizeNotification(result.rows[0]);
+  }
+
+  return queuedWrite(async () => {
+    const store = await readJsonStore();
+    store.notificationAlerts = [notification, ...(store.notificationAlerts || [])].slice(0, 1000);
+    await writeJsonStore(store);
+    return notification;
+  });
+}
+
+async function findNotificationAlert(id) {
+  const notificationId = String(id || "").trim();
+
+  if (!notificationId) {
+    return null;
+  }
+
+  if (usePostgres) {
+    await initStore();
+    const result = await pool.query(
+      `
+        SELECT
+          id,
+          recipient_username AS "recipientUsername",
+          title,
+          message,
+          type,
+          created_at AS "createdAt",
+          expires_at AS "expiresAt",
+          seen,
+          sent_by AS "sentBy"
+        FROM notification_alerts
+        WHERE id = $1
+        LIMIT 1
+      `,
+      [notificationId]
+    );
+
+    return result.rows[0] ? normalizeNotification(result.rows[0]) : null;
+  }
+
+  const store = await readJsonStore();
+  const notification = (store.notificationAlerts || []).find((item) => String(item.id) === notificationId);
+  return notification ? normalizeNotification(notification) : null;
+}
+
+async function listNotificationsForUser(username, options = {}) {
+  const recipientUsername = normalizeUsername(username);
+  const includeSeen = Boolean(options.includeSeen);
+  const limit = clampLimit(options.limit, 40, 100);
+
+  if (!recipientUsername) {
+    return [];
+  }
+
+  if (usePostgres) {
+    await initStore();
+    const result = await pool.query(
+      `
+        SELECT
+          id,
+          recipient_username AS "recipientUsername",
+          title,
+          message,
+          type,
+          created_at AS "createdAt",
+          expires_at AS "expiresAt",
+          seen,
+          sent_by AS "sentBy"
+        FROM notification_alerts
+        WHERE LOWER(recipient_username) = $1
+          AND ($2::boolean = true OR seen = false)
+          AND (expires_at IS NULL OR expires_at > NOW())
+        ORDER BY created_at DESC
+        LIMIT $3
+      `,
+      [recipientUsername, includeSeen, limit]
+    );
+
+    return result.rows.map(normalizeNotification).reverse();
+  }
+
+  const now = Date.now();
+  const store = await readJsonStore();
+  return (store.notificationAlerts || [])
+    .map(normalizeNotification)
+    .filter((notification) => notification.recipientUsername === recipientUsername)
+    .filter((notification) => includeSeen || !notification.seen)
+    .filter((notification) => !notification.expiresAt || new Date(notification.expiresAt).getTime() > now)
+    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
+    .slice(0, limit);
+}
+
+async function markNotificationsRead(username, ids = []) {
+  const recipientUsername = normalizeUsername(username);
+  const notificationIds = (Array.isArray(ids) ? ids : [ids]).map((id) => String(id || "").trim()).filter(Boolean);
+
+  if (!recipientUsername) {
+    return { count: 0, ids: [] };
+  }
+
+  if (usePostgres) {
+    await initStore();
+    const result = await pool.query(
+      notificationIds.length
+        ? `
+            UPDATE notification_alerts
+            SET seen = true
+            WHERE LOWER(recipient_username) = $1
+              AND id = ANY($2::text[])
+            RETURNING id
+          `
+        : `
+            UPDATE notification_alerts
+            SET seen = true
+            WHERE LOWER(recipient_username) = $1
+              AND seen = false
+              AND (expires_at IS NULL OR expires_at > NOW())
+            RETURNING id
+          `,
+      notificationIds.length ? [recipientUsername, notificationIds] : [recipientUsername]
+    );
+
+    return {
+      count: result.rowCount,
+      ids: result.rows.map((row) => row.id)
+    };
+  }
+
+  return queuedWrite(async () => {
+    const store = await readJsonStore();
+    const seenIds = [];
+
+    for (const notification of store.notificationAlerts || []) {
+      const normalized = normalizeNotification(notification);
+      const matchesId = !notificationIds.length || notificationIds.includes(normalized.id);
+      if (normalized.recipientUsername === recipientUsername && matchesId && !normalized.seen) {
+        notification.seen = true;
+        seenIds.push(normalized.id);
+      }
+    }
+
+    await writeJsonStore(store);
+    return { count: seenIds.length, ids: seenIds };
+  });
+}
+
+async function listNotificationHistory(options = {}) {
+  const limit = clampLimit(options.limit, 80, 200);
+
+  if (usePostgres) {
+    await initStore();
+    const result = await pool.query(
+      `
+        SELECT
+          id,
+          recipient_username AS "recipientUsername",
+          title,
+          message,
+          type,
+          created_at AS "createdAt",
+          expires_at AS "expiresAt",
+          seen,
+          sent_by AS "sentBy"
+        FROM notification_alerts
+        ORDER BY created_at DESC
+        LIMIT $1
+      `,
+      [limit]
+    );
+
+    return result.rows.map(normalizeNotification);
+  }
+
+  const store = await readJsonStore();
+  return (store.notificationAlerts || [])
+    .map(normalizeNotification)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    .slice(0, limit);
+}
+
+async function countActiveNotifications() {
+  if (usePostgres) {
+    await initStore();
+    const result = await pool.query(
+      `
+        SELECT COUNT(*)::integer AS count
+        FROM notification_alerts
+        WHERE seen = false
+          AND (expires_at IS NULL OR expires_at > NOW())
+      `
+    );
+    return Number(result.rows[0] && result.rows[0].count) || 0;
+  }
+
+  const now = Date.now();
+  const store = await readJsonStore();
+  return (store.notificationAlerts || [])
+    .map(normalizeNotification)
+    .filter((notification) => !notification.seen)
+    .filter((notification) => !notification.expiresAt || new Date(notification.expiresAt).getTime() > now)
+    .length;
+}
+
+async function deleteNotificationAlert(id) {
+  const notificationId = String(id || "").trim();
+
+  if (!notificationId) {
+    return null;
+  }
+
+  if (usePostgres) {
+    await initStore();
+    const result = await pool.query(
+      `
+        DELETE FROM notification_alerts
+        WHERE id = $1
+        RETURNING
+          id,
+          recipient_username AS "recipientUsername",
+          title,
+          message,
+          type,
+          created_at AS "createdAt",
+          expires_at AS "expiresAt",
+          seen,
+          sent_by AS "sentBy"
+      `,
+      [notificationId]
+    );
+
+    return result.rows[0] ? normalizeNotification(result.rows[0]) : null;
+  }
+
+  return queuedWrite(async () => {
+    const store = await readJsonStore();
+    const index = (store.notificationAlerts || []).findIndex((item) => String(item.id) === notificationId);
+
+    if (index === -1) {
+      return null;
+    }
+
+    const [deleted] = store.notificationAlerts.splice(index, 1);
+    await writeJsonStore(store);
+    return normalizeNotification(deleted);
+  });
+}
+
+async function subscribeNotificationAlerts(onNotification) {
+  if (!usePostgres) {
+    return async () => {};
+  }
+
+  await initStore();
+  const client = await pool.connect();
+  const handleNotification = (message) => {
+    if (message.channel !== "notification_alerts_inserted") {
+      return;
+    }
+
+    let payload = {};
+    try {
+      payload = JSON.parse(message.payload || "{}");
+    } catch {
+      payload = {};
+    }
+
+    Promise.resolve(onNotification(payload)).catch((error) => {
+      console.error("Notification alert delivery failed.", error);
+    });
+  };
+
+  client.on("notification", handleNotification);
+  client.on("error", (error) => {
+    console.error("Notification listener database error.", error);
+  });
+  await client.query("LISTEN notification_alerts_inserted");
+
+  return async () => {
+    client.removeListener("notification", handleNotification);
+    await client.query("UNLISTEN notification_alerts_inserted").catch(() => {});
+    client.release();
+  };
+}
+
 async function updateUserOnlineStatus(username, isOnline) {
   const normalizedUsername = normalizeUsername(username);
 
@@ -2895,31 +3308,39 @@ async function updateUserOnlineStatus(username, isOnline) {
 module.exports = {
   addMessage,
   authenticateUser,
+  countActiveNotifications,
   cleanupExpiredMessages,
   cleanupAnalyticsLogs,
+  createNotificationAlert,
   deleteMessage,
+  deleteNotificationAlert,
   detectSuspiciousLogin,
   endUserSession,
+  findNotificationAlert,
   findUser,
   findAccessibleMessage,
   getUserAvatar,
   getUltimateAdminMonitoring,
   initStore,
+  listNotificationHistory,
   listChatSummaries,
   listConversationMessages,
   listAdminActionLogs,
   listLetterMessages,
   listMessagesForUser,
+  listNotificationsForUser,
   listStarredMessages,
   listUserLoginHistory,
   logAdminAction,
   listUsers,
   markConversationRead,
+  markNotificationsRead,
   markStaleUsersOffline,
   normalizeUsername,
   heartbeatUserSession,
   recordLoginAttempt,
   startUserSession,
+  subscribeNotificationAlerts,
   toggleMessageReaction,
   toggleMessageStar,
   updateUserSecurityStatus,

@@ -59,6 +59,15 @@ const monitorUserList = document.querySelector("#monitor-user-list");
 const monitorEventList = document.querySelector("#monitor-event-list");
 const monitorStatus = document.querySelector("#monitor-status");
 const monitorRefreshButton = document.querySelector("#monitor-refresh-button");
+const notificationStack = document.querySelector("#notification-stack");
+const notificationForm = document.querySelector("#notification-form");
+const notificationRecipient = document.querySelector("#notification-recipient");
+const notificationTitle = document.querySelector("#notification-title");
+const notificationMessage = document.querySelector("#notification-message");
+const notificationType = document.querySelector("#notification-type");
+const notificationAdminStatus = document.querySelector("#notification-admin-status");
+const notificationHistoryList = document.querySelector("#notification-history-list");
+const notificationActiveCount = document.querySelector("#notification-active-count");
 
 const ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
 const REFRESH_MS = 120000;
@@ -80,6 +89,7 @@ let monitoringDebounceTimer = null;
 let pendingAudioBlob = null;
 let mediaRecorder = null;
 let recordingChunks = [];
+const displayedNotificationIds = new Set();
 
 function setStatus(text, type = "neutral") {
   statusMessage.textContent = text;
@@ -105,6 +115,12 @@ function setMonitorStatus(text, type = "neutral") {
   if (!monitorStatus) return;
   monitorStatus.textContent = text;
   monitorStatus.dataset.type = type;
+}
+
+function setNotificationAdminStatus(text, type = "neutral") {
+  if (!notificationAdminStatus) return;
+  notificationAdminStatus.textContent = text;
+  notificationAdminStatus.dataset.type = type;
 }
 
 function countCharacters(value) {
@@ -480,6 +496,158 @@ function renderMonitoring(data) {
   setMonitorStatus(`Updated ${formatShortDate(data.generatedAt)}.`, "success");
 }
 
+function populateNotificationRecipients() {
+  if (!notificationRecipient) {
+    return;
+  }
+
+  const currentValue = notificationRecipient.value || "__broadcast__";
+  const options = [
+    new Option("Broadcast to everyone", "__broadcast__"),
+    ...recipients
+      .filter((user) => user.username)
+      .map((user) => new Option(`${user.displayName || user.username} @${user.username}`, user.username))
+  ];
+
+  notificationRecipient.replaceChildren(...options);
+  notificationRecipient.value = options.some((option) => option.value === currentValue)
+    ? currentValue
+    : "__broadcast__";
+}
+
+async function markPopupRead(id) {
+  if (!id) {
+    return;
+  }
+
+  try {
+    await fetch("/api/notifications/read", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: [id] })
+    });
+  } catch {
+    // Popup read state is best-effort; unread alerts will show again on next login if this fails.
+  }
+}
+
+function closePopup(node, id) {
+  if (!node || node.dataset.closing === "true") {
+    return;
+  }
+
+  node.dataset.closing = "true";
+  node.classList.add("is-leaving");
+  window.setTimeout(() => node.remove(), 220);
+  markPopupRead(id);
+}
+
+function playPopupSound() {
+  try {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) return;
+    const context = new AudioContext();
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.type = "sine";
+    oscillator.frequency.value = 660;
+    gain.gain.setValueAtTime(0.0001, context.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.035, context.currentTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.18);
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start();
+    oscillator.stop(context.currentTime + 0.2);
+  } catch {
+    // Sound is optional and may be blocked by browser autoplay rules.
+  }
+}
+
+function showPopupNotification(notification) {
+  if (!notification || !notification.id || displayedNotificationIds.has(notification.id) || !notificationStack) {
+    return;
+  }
+
+  displayedNotificationIds.add(notification.id);
+
+  const node = document.createElement("article");
+  const top = document.createElement("div");
+  const title = document.createElement("strong");
+  const close = document.createElement("button");
+  const message = document.createElement("p");
+  const type = notification.type || "info";
+
+  node.className = `popup-alert popup-alert-${type}`;
+  top.className = "popup-alert-topline";
+  title.textContent = notification.title || "ForyoU notice";
+  close.type = "button";
+  close.textContent = "Close";
+  close.addEventListener("click", () => closePopup(node, notification.id));
+  message.textContent = notification.message || "";
+
+  top.append(title, close);
+  node.append(top, message);
+  notificationStack.prepend(node);
+  playPopupSound();
+
+  window.setTimeout(() => closePopup(node, notification.id), 8000);
+}
+
+async function loadNotifications() {
+  if (!currentUser) {
+    return;
+  }
+
+  try {
+    const response = await fetch("/api/notifications", { cache: "no-store" });
+    const result = await response.json();
+
+    if (response.ok) {
+      (result.notifications || []).forEach(showPopupNotification);
+    }
+  } catch {
+    // Realtime notifications are socket-driven; this only catches offline alerts.
+  }
+}
+
+function renderNotificationHistory(data) {
+  if (!notificationHistoryList || !notificationActiveCount) {
+    return;
+  }
+
+  notificationActiveCount.textContent = `${data.activeCount || 0} active`;
+  const notifications = data.notifications || [];
+
+  if (!notifications.length) {
+    notificationHistoryList.replaceChildren(makeEmptyState("No popup alerts yet."));
+    return;
+  }
+
+  notificationHistoryList.replaceChildren(
+    ...notifications.slice(0, 20).map((notification) => {
+      const item = document.createElement("article");
+      const copy = document.createElement("span");
+      const title = document.createElement("strong");
+      const meta = document.createElement("small");
+      const message = document.createElement("p");
+      const button = document.createElement("button");
+
+      item.className = "notification-history-item";
+      copy.className = "notification-history-copy";
+      title.textContent = notification.title;
+      meta.textContent = `${notification.type} • @${notification.recipientUsername} • ${notification.seen ? "seen" : "active"} • ${formatShortDate(notification.createdAt)}`;
+      message.textContent = notification.message;
+      button.type = "button";
+      button.textContent = "Delete";
+      button.addEventListener("click", () => deleteAdminNotification(notification.id));
+
+      copy.append(title, meta, message);
+      item.append(copy, button);
+      return item;
+    })
+  );
+}
+
 function ensureConversationForRecipients() {
   const existing = new Set(conversations.map((item) => item.peerUsername));
   const additions = recipients
@@ -741,7 +909,9 @@ async function loadSession() {
     startAutoRefresh();
     startHeartbeat();
     await loadAll();
+    await loadNotifications();
     await loadAdminMonitoring();
+    await loadAdminNotifications();
 
     showMessagesPanel();
     document.getElementById("admin-loading-panel")?.classList.add("is-hidden");
@@ -769,6 +939,7 @@ async function loadRecipients() {
   }
 
   recipients = result.recipients || [];
+  populateNotificationRecipients();
 }
 
 async function loadChats() {
@@ -822,13 +993,33 @@ async function loadAdminMonitoring() {
   }
 }
 
+async function loadAdminNotifications() {
+  if (!isUltimateAdminUser(currentUser)) {
+    return;
+  }
+
+  try {
+    const response = await fetch("/api/admin/notifications", { cache: "no-store" });
+    const result = await response.json();
+
+    if (response.ok) {
+      renderNotificationHistory(result);
+    }
+  } catch {
+    setNotificationAdminStatus("Could not load popup history.", "error");
+  }
+}
+
 function scheduleMonitoringLoad() {
   if (!isUltimateAdminUser(currentUser)) {
     return;
   }
 
   window.clearTimeout(monitoringDebounceTimer);
-  monitoringDebounceTimer = window.setTimeout(loadAdminMonitoring, 350);
+  monitoringDebounceTimer = window.setTimeout(() => {
+    loadAdminMonitoring();
+    loadAdminNotifications();
+  }, 350);
 }
 
 async function updateSecurityStatus(username, accountStatus) {
@@ -865,6 +1056,72 @@ async function updateSecurityStatus(username, accountStatus) {
     await loadAll();
   } catch {
     setMonitorStatus("Network error while saving account.", "error");
+  }
+}
+
+async function sendAdminNotification(event) {
+  event.preventDefault();
+
+  if (!isUltimateAdminUser(currentUser)) {
+    return;
+  }
+
+  const recipientValue = notificationRecipient.value;
+  const payload = {
+    broadcast: recipientValue === "__broadcast__",
+    recipientUsername: recipientValue === "__broadcast__" ? "" : recipientValue,
+    title: notificationTitle.value.trim(),
+    message: notificationMessage.value.trim(),
+    type: notificationType.value
+  };
+
+  if (!payload.title || !payload.message) {
+    setNotificationAdminStatus("Title and message are required.", "error");
+    return;
+  }
+
+  setNotificationAdminStatus("Sending popup...", "neutral");
+
+  try {
+    const response = await fetch("/api/admin/notifications", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const result = await response.json();
+
+    if (!response.ok) {
+      setNotificationAdminStatus(result.error || "Could not send popup.", "error");
+      return;
+    }
+
+    notificationTitle.value = "";
+    notificationMessage.value = "";
+    setNotificationAdminStatus(`Sent ${result.count || 0} popup alert${result.count === 1 ? "" : "s"}.`, "success");
+    await loadAdminNotifications();
+  } catch {
+    setNotificationAdminStatus("Network error while sending popup.", "error");
+  }
+}
+
+async function deleteAdminNotification(id) {
+  setNotificationAdminStatus("Deleting popup...", "neutral");
+
+  try {
+    const response = await fetch(`/api/admin/notifications/${encodeURIComponent(id)}`, {
+      method: "DELETE"
+    });
+    const result = await response.json();
+
+    if (!response.ok) {
+      setNotificationAdminStatus(result.error || "Could not delete popup.", "error");
+      return;
+    }
+
+    setNotificationAdminStatus("Popup deleted.", "success");
+    await loadAdminNotifications();
+  } catch {
+    setNotificationAdminStatus("Network error while deleting popup.", "error");
   }
 }
 
@@ -1026,6 +1283,15 @@ function connectSocket() {
   });
 
   socket.on("admin:monitoring-dirty", scheduleMonitoringLoad);
+
+  socket.on("notification:alert", ({ notification }) => {
+    showPopupNotification(notification);
+    scheduleMonitoringLoad();
+  });
+
+  socket.on("notification:batch", ({ notifications }) => {
+    (notifications || []).forEach(showPopupNotification);
+  });
 
   socket.on("account:security", ({ message }) => {
     setLoginMessage(message || "Your account status changed. Please log in again.", "error");
@@ -1349,7 +1615,9 @@ loginForm.addEventListener("submit", async (event) => {
     startAutoRefresh();
     startHeartbeat();
     await loadAll();
+    await loadNotifications();
     await loadAdminMonitoring();
+    await loadAdminNotifications();
   } catch {
     setLoginMessage("Network error. Please try again.", "error");
   } finally {
@@ -1359,6 +1627,7 @@ loginForm.addEventListener("submit", async (event) => {
 
 refreshButton.addEventListener("click", loadAll);
 monitorRefreshButton?.addEventListener("click", loadAdminMonitoring);
+notificationForm?.addEventListener("submit", sendAdminNotification);
 backChatButton.addEventListener("click", closeConversation);
 viewProfileButton.addEventListener("click", openPeerProfile);
 peerProfileClose.addEventListener("click", closePeerProfile);
