@@ -282,19 +282,24 @@ textarea:focus-visible {
   position: fixed;
   top: 0;
   right: 0;
+  bottom: 0;
   z-index: 31;
   display: grid;
   align-content: start;
   width: min(86vw, 340px);
-  min-height: 100vh;
+  height: 100dvh;
+  max-height: 100dvh;
   border-left: 1px solid var(--line);
   background:
     linear-gradient(180deg, rgba(255, 111, 159, 0.12), transparent 32%),
     rgba(21, 14, 24, 0.98);
   box-shadow: -22px 0 50px rgba(0, 0, 0, 0.42);
   overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 24px;
+  overscroll-behavior-y: contain;
+  padding: 24px 24px max(28px, env(safe-area-inset-bottom));
+  scrollbar-gutter: stable;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
   animation: drawerIn var(--motion-medium) var(--ease-soft) both;
 }
 
@@ -302,19 +307,24 @@ textarea:focus-visible {
   position: fixed;
   top: 0;
   right: 0;
+  bottom: 0;
   z-index: 31;
   display: grid;
   align-content: start;
   width: min(88vw, 380px);
-  min-height: 100vh;
+  height: 100dvh;
+  max-height: 100dvh;
   border-left: 1px solid var(--line);
   background:
     linear-gradient(180deg, rgba(244, 199, 119, 0.1), transparent 30%),
     rgba(21, 14, 24, 0.98);
   box-shadow: -22px 0 50px rgba(0, 0, 0, 0.42);
   overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 24px;
+  overscroll-behavior-y: contain;
+  padding: 24px 24px max(28px, env(safe-area-inset-bottom));
+  scrollbar-gutter: stable;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
   animation: drawerIn var(--motion-medium) var(--ease-soft) both;
 }
 
