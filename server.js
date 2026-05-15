@@ -546,10 +546,10 @@ function isAccountBlocked(user) {
 
 function accountBlockedMessage(user) {
   if (user && user.accountStatus === "suspended") {
-    return "This account is temporarily suspended.";
+    return "Your account is temporarily suspended. Please contact admin.";
   }
 
-  return "This account is blocked.";
+  return "Your account is blocked. Please contact admin.";
 }
 
 function pruneActiveUsers(now = Date.now()) {
