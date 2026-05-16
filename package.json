@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "hash-password": "node scripts/hash-password.js"
+    "hash-password": "node scripts/hash-password.js",
+    "cleanup": "node scripts/maintenance.js cleanup",
+    "storage:summary": "node scripts/maintenance.js storage"
   },
   "engines": {
     "node": ">=18.18.0"
@@ -14,6 +16,7 @@
   "dependencies": {
     "cloudinary": "^2.10.0",
     "compression": "^1.8.1",
+    "connect-pg-simple": "^10.0.0",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "express-rate-limit": "^7.5.0",

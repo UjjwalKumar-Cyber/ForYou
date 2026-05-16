@@ -57,6 +57,7 @@ const ultimateAdminPanel = document.querySelector("#ultimate-admin-panel");
 const monitorStats = document.querySelector("#monitor-stats");
 const monitorUserList = document.querySelector("#monitor-user-list");
 const monitorEventList = document.querySelector("#monitor-event-list");
+const storageSummary = document.querySelector("#storage-summary");
 const monitorStatus = document.querySelector("#monitor-status");
 const monitorRefreshButton = document.querySelector("#monitor-refresh-button");
 const notificationStack = document.querySelector("#notification-stack");
@@ -351,12 +352,12 @@ function messagePreview(message) {
     return message.attachment.name || "Attachment";
   }
 
-  return "Message";
+  return "Letter";
 }
 
 function chatPreview(conversation, peer) {
   if (!conversation.lastMessage) {
-    return peer.username === "__letters__" ? "Secret page notes will appear here" : "Tap to start chatting";
+    return peer.username === "__letters__" ? "Secret page notes will appear here" : "Tap to start writing";
   }
 
   const sender =
@@ -406,6 +407,34 @@ function makeMonitorStat(label, value) {
   return item;
 }
 
+function renderStorageSummary(summary) {
+  if (!storageSummary) {
+    return;
+  }
+
+  const tables = (summary && summary.tables ? summary.tables : [])
+    .filter((item) => item.exists !== false)
+    .slice(0, 6);
+
+  if (!tables.length) {
+    storageSummary.replaceChildren(makeEmptyState("No storage data yet."));
+    return;
+  }
+
+  storageSummary.replaceChildren(
+    ...tables.map((table) => {
+      const item = document.createElement("span");
+      const name = document.createElement("strong");
+      const meta = document.createElement("small");
+      item.className = "storage-summary-item";
+      name.textContent = table.table;
+      meta.textContent = `${table.rows || 0} rows • ${table.prettySize || "0 bytes"}`;
+      item.append(name, meta);
+      return item;
+    })
+  );
+}
+
 function renderMonitoring(data) {
   if (!isUltimateAdminUser(currentUser) || !data || !monitorStats || !monitorUserList || !monitorEventList) {
     return;
@@ -418,6 +447,7 @@ function renderMonitoring(data) {
     makeMonitorStat("alerts", stats.suspiciousEvents || 0),
     makeMonitorStat("restricted", stats.blockedUsers || 0)
   );
+  renderStorageSummary(data.storageSummary);
 
   const users = data.users || [];
   if (!users.length) {
@@ -724,7 +754,7 @@ function updatePeerHeader() {
   if (!currentPeer) {
     setConversationOpen(false);
     peerName.textContent = "Choose a chat";
-    peerStatus.textContent = "Tap a name or new text to open message history.";
+    peerStatus.textContent = "Tap a name or new letter to open memory history.";
     peerAvatar.textContent = "F";
     peerAvatar.style.backgroundImage = "";
     starredButton.disabled = true;
@@ -834,7 +864,7 @@ function renderMessages(messages) {
   currentMessages = messages;
 
   if (!messages.length) {
-    messageList.replaceChildren(makeEmptyState("No messages here yet."));
+    messageList.replaceChildren(makeEmptyState("No letters here yet."));
     return;
   }
 
@@ -869,7 +899,7 @@ function renderMessages(messages) {
     renderReactions(message, node.querySelector(".reaction-row"));
 
     const starButton = node.querySelector('[data-action="star"]');
-    starButton.textContent = (message.starredBy || []).includes(currentUser.username) ? "Starred" : "Star";
+    starButton.textContent = (message.starredBy || []).includes(currentUser.username) ? "Saved" : "Save";
     node.querySelector('[data-action="reply"]').addEventListener("click", () => startReply(message));
     node.querySelector('[data-action="star"]').addEventListener("click", () => toggleStar(message.id));
     node.querySelector('[data-action="react"]').addEventListener("click", () => toggleReaction(message.id, "❤️"));
@@ -1157,7 +1187,7 @@ async function sendHeartbeat() {
 async function loadMessages(options = {}) {
   if (!currentPeer) {
     updatePeerHeader();
-    messageList.replaceChildren(makeEmptyState("Tap a name or new text to open the full chat history."));
+    messageList.replaceChildren(makeEmptyState("Tap a name or new letter to open the full memory history."));
     return;
   }
 
@@ -1191,7 +1221,7 @@ async function loadAll() {
       await loadMessages({ skipRead: true });
     } else {
       updatePeerHeader();
-      messageList.replaceChildren(makeEmptyState("Tap a name or new text to open the full chat history."));
+      messageList.replaceChildren(makeEmptyState("Tap a name or new letter to open the full memory history."));
     }
     setStatus("Synced.");
   } catch (error) {
@@ -1214,7 +1244,7 @@ function closeConversation() {
   clearReply();
   renderChatList();
   updatePeerHeader();
-  messageList.replaceChildren(makeEmptyState("Tap a name or new text to open the full chat history."));
+  messageList.replaceChildren(makeEmptyState("Tap a name or new letter to open the full memory history."));
 }
 
 async function markRead() {
@@ -1235,6 +1265,33 @@ function connectSocket() {
   }
 
   socket = window.io();
+
+  socket.on("connect", () => {
+    if (!currentUser) {
+      return;
+    }
+
+    sendHeartbeat();
+    loadNotifications();
+    if (conversations.length) {
+      loadAll();
+    }
+    scheduleMonitoringLoad();
+  });
+
+  socket.on("disconnect", () => {
+    if (currentUser) {
+      setStatus("Reconnecting live updates...", "neutral");
+    }
+  });
+
+  socket.on("connect_error", (error) => {
+    if (error && error.message === "restricted") {
+      setLoginMessage("Your account cannot open right now. Please contact admin.", "error");
+      currentUser = null;
+      showLoginPanel();
+    }
+  });
 
   socket.on("presence:update", ({ users }) => {
     recipients = recipients.map((recipient) => {
@@ -1333,7 +1390,7 @@ function upsertConversationFromMessage(message) {
 }
 
 function showSoftAlert(message) {
-  setStatus(`New text from ${message.senderName || "Someone"}.`);
+  setStatus(`New letter from ${message.senderName || "Someone"}.`);
 }
 
 function startReply(message) {
@@ -1364,7 +1421,7 @@ function validateAttachment(file) {
 function updateAttachmentName() {
   const file = selectedAttachmentFile();
   if (!file) {
-    accountImageName.textContent = "Text, photo, video, file, or voice note. Starred messages stay saved.";
+    accountImageName.textContent = "Letter, photo, video, file, or voice note. Saved memories stay out of auto-delete.";
     return;
   }
   accountImageName.textContent = file.name || "Voice note ready";
@@ -1383,7 +1440,7 @@ async function sendMessage(event) {
   const fileError = validateAttachment(file);
 
   if (!text && !file) {
-    setComposerStatus("Write a message or attach something.", "error");
+    setComposerStatus("Write a letter or attach something.", "error");
     return;
   }
 

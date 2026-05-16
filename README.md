@@ -1,6 +1,6 @@
 # ForyoU
 
-ForyoU is a private, nostalgic messaging website built with Node.js, Express, Socket.IO, and SQLite-style JSON storage locally or Postgres on Render. It has a password-protected secret note page plus logged-in account chats with realtime delivery, media sharing, profiles, voice notes, starred messages, and a warm handwritten-letter style UI.
+ForyoU is a private, nostalgic memory and messaging website built with Node.js, Express, Socket.IO, JSON storage locally, and Postgres on Render. It is centered on private memories, hidden feelings, emotional letters, and time capsules, with a password-protected secret note page plus logged-in account conversations.
 
 Locally, data is saved in `data/messages.json`. On Render, the included Blueprint uses Render Postgres through `DATABASE_URL`.
 
@@ -34,7 +34,10 @@ foryou/
 │   ├── admin.html
 │   ├── message.html
 │   ├── password.html
-│   └── profile.html
+│   ├── privacy.html
+│   ├── profile.html
+│   ├── security.html
+│   └── terms.html
 ├── .env.example
 ├── .gitignore
 ├── package.json
@@ -61,12 +64,15 @@ foryou/
 - Starred messages that stay saved
 - Delete option inside each message history
 - Normal messages auto-expire after 24 hours unless starred
+- Memory/time-capsule foundations: messages support memory type, memory date, delayed delivery, open-later hiding, and a saved memory timeline API
 - Profile settings for display name, username, password, profile photo, bio, email, theme, wallpaper, font, and color
+- Privacy, terms, and security pages for private testers
 - Mobile-first nostalgic letter UI with dark, light, and midnight themes
 - PWA manifest and service worker for app-like loading of static assets
-- Long-lived sessions with manual logout
+- Long-lived sessions with manual logout, backed by Postgres sessions in production
 - Transparent ultimate-admin monitoring for online status, last seen, login history, suspicious login attempts, device/browser summaries, and approximate IP-based city/country
 - Admin account block/suspend controls with admin action logs
+- Admin popup alerts, broadcast notices, popup history, and table/storage size summary
 - Optional Cloudinary media storage so profile pictures and uploads are stored as URLs instead of large database blobs
 - `helmet` security headers and `express-rate-limit`
 - Server-side sanitization with `sanitize-html`
@@ -88,6 +94,7 @@ MESSAGE_PAGE_PASSWORD=your-secret-page-password
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=your-admin-password
 SESSION_SECRET=generate-a-long-random-string
+DATABASE_URL=your-postgres-url-for-production
 ```
 
 Generate a session secret:
@@ -114,6 +121,13 @@ The app stores password hashes, not readable passwords. To manually create a has
 npm run hash-password -- your-password
 ```
 
+Maintenance helpers:
+
+```bash
+npm run cleanup
+npm run storage:summary
+```
+
 ## Run Locally
 
 ```bash
@@ -137,6 +151,9 @@ If no `.env` is present, development fallback passwords are:
 GET    /secret-8392-love-note
 GET    /admin
 GET    /profile
+GET    /privacy
+GET    /terms
+GET    /security
 POST   /api/login
 POST   /api/logout
 POST   /api/message
@@ -147,11 +164,15 @@ GET    /api/chats/:peer/messages
 POST   /api/chats/:peer/read
 GET    /api/messages
 GET    /api/messages/starred
+GET    /api/memories/timeline
 POST   /api/messages/:id/star
 POST   /api/messages/:id/reactions
 DELETE /api/messages/:id
 POST   /api/ping
 GET    /api/admin/monitoring
+GET    /api/admin/notifications
+POST   /api/admin/notifications
+DELETE /api/admin/notifications/:id
 GET    /api/admin/users/:username/logins
 PATCH  /api/admin/users/:username/security
 GET    /api/profile
@@ -171,6 +192,8 @@ recipientUsername=kabir
 message=Your note
 attachment=@photo.png
 replyToId=optional-message-id
+deliverAt=optional-future-date
+memoryDate=optional-memory-date
 ```
 
 Logged-in users can send account-to-account messages from the chat composer; public visitors can send through the secret note page after entering the secret password.
@@ -206,6 +229,7 @@ Your live URL may look like `https://foryou-zbm5.onrender.com`; the service name
    - `ADMIN_USERNAME=admin`
    - `ADMIN_PASSWORD=your-admin-password`
    - `SESSION_SECRET=a-long-random-string`
+   - `DATABASE_URL=your-render-postgres-internal-url`
    - optional `ACCOUNT_USERS=username:password,another:password`
 4. Create a Render Postgres database.
 5. Add its internal connection string as `DATABASE_URL`.

@@ -7,6 +7,7 @@ const compression = require("compression");
 const express = require("express");
 const rateLimit = require("express-rate-limit");
 const session = require("express-session");
+const PgSession = require("connect-pg-simple")(session);
 const helmet = require("helmet");
 const multer = require("multer");
 const sanitizeHtml = require("sanitize-html");
@@ -20,6 +21,7 @@ const {
   countActiveNotifications,
   cleanupAnalyticsLogs,
   cleanupExpiredMessages,
+  cleanupExpiredNotifications,
   createNotificationAlert,
   deleteMessage,
   deleteNotificationAlert,
@@ -29,6 +31,8 @@ const {
   findUser,
   findAccessibleMessage,
   getUltimateAdminMonitoring,
+  getPostgresPool,
+  getStorageSummary,
   getUserAvatar,
   heartbeatUserSession,
   initStore,
@@ -38,6 +42,7 @@ const {
   listConversationMessages,
   listLetterMessages,
   listMessagesForUser,
+  listMemoryTimeline,
   listNotificationsForUser,
   listStarredMessages,
   listUsers,
@@ -178,6 +183,10 @@ const SESSION_SECRET = requiredSecret(
   "local-development-session-secret-change-me"
 );
 
+if (isProduction && !process.env.DATABASE_URL) {
+  throw new Error("DATABASE_URL must be set in production so sessions and app data use PostgreSQL.");
+}
+
 process.env.ADMIN_PASSWORD = ADMIN_PASSWORD;
 
 const activeUsers = new Map();
@@ -236,19 +245,32 @@ app.use(
 app.use(express.json({ limit: "12kb" }));
 app.use(express.urlencoded({ extended: false, limit: "12kb" }));
 
+const sessionStore = process.env.DATABASE_URL
+  ? new PgSession({
+      pool: getPostgresPool(),
+      tableName: "user_sessions",
+      createTableIfMissing: true,
+      pruneSessionInterval: 15 * 60,
+      errorLog: (error) => {
+        console.error("Session store error.", error);
+      }
+    })
+  : undefined;
+
 const sessionMiddleware = session({
-    name: "private_love_note.sid",
-    secret: SESSION_SECRET,
-    resave: false,
-    saveUninitialized: true,
-    rolling: true,
-    cookie: {
-      httpOnly: true,
-      maxAge: 1000 * 60 * 60 * 24 * 365,
-      sameSite: "strict",
-      secure: isProduction
-    }
-  });
+  name: "private_love_note.sid",
+  secret: SESSION_SECRET,
+  store: sessionStore,
+  resave: false,
+  saveUninitialized: false,
+  rolling: true,
+  cookie: {
+    httpOnly: true,
+    maxAge: 1000 * 60 * 60 * 24 * 365,
+    sameSite: "strict",
+    secure: isProduction
+  }
+});
 
 app.use(sessionMiddleware);
 io.engine.use(sessionMiddleware);
@@ -339,26 +361,72 @@ function requireSecretAccess(req, res, next) {
   return res.status(401).json({ error: "Please unlock the private page first." });
 }
 
-function requireAccount(req, res, next) {
+async function destroyRestrictedSession(req, username) {
+  activeUsers.delete(username);
+  await endUserSession(username, req.sessionID);
+  invalidateUserCache();
+  schedulePresenceUpdate();
+  scheduleAdminMonitoringUpdate();
+  return new Promise((resolve) => {
+    req.session.destroy(() => resolve());
+  });
+}
+
+async function requireAccount(req, res, next) {
+  const username = normalizeUsername(req.session.accountUser && req.session.accountUser.username);
+
+  if (!username) {
+    noStore(res);
+    return res.status(401).json({ error: "Please log in to your inbox." });
+  }
+
+  try {
+    const user = await findUser(username);
+
+    if (!user) {
+      await destroyRestrictedSession(req, username);
+      noStore(res);
+      return res.status(401).json({ error: "Please log in to your inbox." });
+    }
+
+    if (isAccountBlocked(user)) {
+      await destroyRestrictedSession(req, username);
+      noStore(res);
+      return res.status(403).json({ error: accountBlockedMessage(user) });
+    }
+
+    req.session.accountUser = publicAccount({
+      ...user,
+      anonymousMode: req.session.accountUser.anonymousMode
+    });
+    markUserActive(req.session.accountUser);
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function requireUltimateAdmin(req, res, next) {
+  await requireAccount(req, res, (error) => {
+    if (error) {
+      return next(error);
+    }
+
+    if (isUltimateAdmin(req.session.accountUser)) {
+      return next();
+    }
+
+    noStore(res);
+    return res.status(403).json({ error: "Ultimate admin access is required." });
+  });
+}
+
+async function requireMessageAccess(req, res, next) {
   if (req.session.accountUser && req.session.accountUser.username) {
-    return next();
+    return requireAccount(req, res, next);
   }
 
-  noStore(res);
-  return res.status(401).json({ error: "Please log in to your inbox." });
-}
-
-function requireUltimateAdmin(req, res, next) {
-  if (req.session.accountUser && isUltimateAdmin(req.session.accountUser)) {
-    return next();
-  }
-
-  noStore(res);
-  return res.status(403).json({ error: "Ultimate admin access is required." });
-}
-
-function requireMessageAccess(req, res, next) {
-  if (req.session.secretUnlocked === true || (req.session.accountUser && req.session.accountUser.username)) {
+  if (req.session.secretUnlocked === true) {
     return next();
   }
 
@@ -394,6 +462,32 @@ function cleanSenderName(input) {
 
 function cleanDisplayName(input) {
   return cleanText(input);
+}
+
+function parseBooleanFlag(value) {
+  return value === true || value === "true" || value === "1" || value === "on";
+}
+
+function parseOptionalDate(input, options = {}) {
+  const raw = String(input || "").trim();
+
+  if (!raw) {
+    return { value: null };
+  }
+
+  const date = new Date(raw);
+
+  if (Number.isNaN(date.getTime())) {
+    return { error: "Please choose a valid date." };
+  }
+
+  if (options.futureOnly && date.getTime() <= Date.now()) {
+    return { error: "Open-later messages need a future date." };
+  }
+
+  return {
+    value: options.dateOnly ? date.toISOString().slice(0, 10) : date.toISOString()
+  };
 }
 
 function isValidAccountUsername(input) {
@@ -1064,15 +1158,29 @@ function emitMessageMutation(message, eventName) {
   io.to(userRoom(message.recipientUsername)).emit(eventName, { message });
 }
 
-io.use((socket, next) => {
+io.use(async (socket, next) => {
   const accountUser = socket.request.session && socket.request.session.accountUser;
+  const username = normalizeUsername(accountUser && accountUser.username);
 
-  if (!accountUser || !accountUser.username) {
+  if (!username) {
     return next(new Error("unauthorized"));
   }
 
-  socket.accountUser = publicAccount(accountUser);
-  return next();
+  try {
+    const user = await findUser(username);
+
+    if (!user || isAccountBlocked(user)) {
+      return next(new Error("restricted"));
+    }
+
+    socket.accountUser = publicAccount({
+      ...user,
+      anonymousMode: accountUser.anonymousMode
+    });
+    return next();
+  } catch (error) {
+    return next(error);
+  }
 });
 
 io.on("connection", (socket) => {
@@ -1136,6 +1244,18 @@ app.get("/admin", (req, res) => {
 
 app.get("/profile", (req, res) => {
   sendView(res, "profile.html");
+});
+
+app.get("/privacy", (req, res) => {
+  sendView(res, "privacy.html");
+});
+
+app.get("/terms", (req, res) => {
+  sendView(res, "terms.html");
+});
+
+app.get("/security", (req, res) => {
+  sendView(res, "security.html");
 });
 
 app.post("/api/login", loginLimiter, async (req, res, next) => {
@@ -1232,7 +1352,26 @@ app.post("/api/message", requireMessageAccess, messageLimiter, handleMessageUplo
     const replyToId = /^[a-f0-9-]{36}$/i.test(String(req.body.replyToId || ""))
       ? String(req.body.replyToId)
       : null;
+    const deliverAtInput = req.body.deliverAt || req.body.openAt || "";
+    const memoryDateInput = req.body.memoryDate || "";
+    const deliverAtResult = parseOptionalDate(deliverAtInput, { futureOnly: true });
+    const memoryDateResult = parseOptionalDate(memoryDateInput, { dateOnly: true });
+    const rawMemoryType = cleanText(req.body.memoryType || "").slice(0, 40);
+    const allowedMemoryTypes = new Set(["letter", "memory", "time_capsule", "anniversary"]);
+    const memoryType = allowedMemoryTypes.has(rawMemoryType) ? rawMemoryType : deliverAtResult.value ? "time_capsule" : "letter";
+    const isTimeCapsule = parseBooleanFlag(req.body.isTimeCapsule) || Boolean(deliverAtResult.value);
+    const expiresAt = deliverAtResult.value
+      ? new Date(new Date(deliverAtResult.value).getTime() + 24 * 60 * 60 * 1000).toISOString()
+      : undefined;
     const length = Array.from(text).length;
+
+    if (deliverAtResult.error) {
+      return res.status(400).json({ error: deliverAtResult.error });
+    }
+
+    if (memoryDateResult.error) {
+      return res.status(400).json({ error: memoryDateResult.error });
+    }
 
     if (!senderName) {
       return res.status(400).json({ error: "Please add your sender name." });
@@ -1272,7 +1411,12 @@ app.post("/api/message", requireMessageAccess, messageLimiter, handleMessageUplo
       attachment,
       image: attachment && attachment.kind === "image" ? attachment : null,
       kind: attachment ? attachment.kind : "text",
-      replyToId
+      replyToId,
+      memoryType,
+      deliverAt: deliverAtResult.value,
+      memoryDate: memoryDateResult.value,
+      isTimeCapsule,
+      expiresAt
     });
 
     if (senderUsername) {
@@ -1322,7 +1466,22 @@ app.get("/api/session", async (req, res, next) => {
 
   try {
     if (req.session.accountUser && req.session.accountUser.username) {
-      await heartbeatUserSession(req.session.accountUser.username, req.sessionID);
+      const username = normalizeUsername(req.session.accountUser.username);
+      const user = await findUser(username);
+
+      if (!user || isAccountBlocked(user)) {
+        await destroyRestrictedSession(req, username);
+        return res.status(user ? 403 : 401).json({
+          user: null,
+          error: user ? accountBlockedMessage(user) : "Please log in to your inbox."
+        });
+      }
+
+      req.session.accountUser = publicAccount({
+        ...user,
+        anonymousMode: req.session.accountUser.anonymousMode
+      });
+      await heartbeatUserSession(username, req.sessionID);
       markUserActive(req.session.accountUser);
     }
 
@@ -1654,6 +1813,16 @@ app.get("/api/messages/starred", requireAccount, async (req, res, next) => {
   }
 });
 
+app.get("/api/memories/timeline", requireAccount, async (req, res, next) => {
+  try {
+    noStore(res);
+    const memories = await listMemoryTimeline(req.session.accountUser.username, { limit: req.query.limit || 120 });
+    return res.json({ memories });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 app.post("/api/messages/:id/star", requireAccount, async (req, res, next) => {
   try {
     noStore(res);
@@ -1734,9 +1903,13 @@ app.post("/api/notifications/read", requireAccount, analyticsLimiter, async (req
 app.get("/api/admin/monitoring", requireUltimateAdmin, analyticsLimiter, async (req, res, next) => {
   try {
     noStore(res);
-    const monitoring = await getUltimateAdminMonitoring({ limit: req.query.limit || 120 });
+    const [monitoring, storageSummary] = await Promise.all([
+      getUltimateAdminMonitoring({ limit: req.query.limit || 120 }),
+      getStorageSummary()
+    ]);
     return res.json({
       ...monitoring,
+      storageSummary,
       notice:
         "This dashboard shows transparent security monitoring data for signed-in accounts. Anonymous Mode is still hidden from regular users."
     });
@@ -1999,6 +2172,9 @@ initStore()
       });
       cleanupAnalyticsLogs().catch((error) => {
         console.error("Analytics cleanup failed.", error);
+      });
+      cleanupExpiredNotifications().catch((error) => {
+        console.error("Notification cleanup failed.", error);
       });
     }, 60 * 60 * 1000);
 

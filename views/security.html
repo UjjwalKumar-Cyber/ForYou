@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow">
+    <meta name="theme-color" content="#2b1b25">
+    <title>ForyoU Security</title>
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="stylesheet" href="/css/styles.css?v=20260516-beta">
+  </head>
+  <body>
+    <main class="page-shell legal-shell">
+      <article class="card legal-page" aria-labelledby="security-title">
+        <a class="button secondary-button compact-button link-button" href="/admin">Back</a>
+        <p class="eyebrow">Private testing</p>
+        <h1 id="security-title">Security</h1>
+        <p class="soft-copy">ForyoU uses practical beta safeguards so testers can use the site calmly while the product grows.</p>
+
+        <section class="legal-section">
+          <h2>Account Protection</h2>
+          <p>Passwords are stored as hashes, sessions use secure cookies in production, and protected APIs re-check whether an account is active before allowing access.</p>
+        </section>
+
+        <section class="legal-section">
+          <h2>Abuse Protection</h2>
+          <p>Login, message, admin, and activity APIs are rate limited. Admins can block, suspend, or reactivate accounts and these actions are logged.</p>
+        </section>
+
+        <section class="legal-section">
+          <h2>Media Safety</h2>
+          <p>Uploads are limited by type and size. Images are compressed before storage when possible, and Cloudinary can be used so the database stores URLs instead of large files.</p>
+        </section>
+
+        <section class="legal-section">
+          <h2>Private Tester Reminder</h2>
+          <p>ForyoU is not end-to-end encrypted yet. Avoid sending secrets that require stronger protection until that feature exists.</p>
+        </section>
+
+        <nav class="trust-links" aria-label="ForyoU trust pages">
+          <a href="/privacy">Privacy</a>
+          <a href="/terms">Terms</a>
+          <a href="/secret-8392-love-note">Secret page</a>
+        </nav>
+      </article>
+    </main>
+  </body>
+</html>

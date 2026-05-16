@@ -8,7 +8,7 @@
     <title>ForyoU Secret Note</title>
     <link rel="manifest" href="/manifest.webmanifest">
     <link rel="preload" href="/assets/seal.svg" as="image" type="image/svg+xml">
-    <link rel="stylesheet" href="/css/styles.css?v=20260516-popups3">
+    <link rel="stylesheet" href="/css/styles.css?v=20260516-beta">
   </head>
   <body>
     <main class="page-shell message-shell">
@@ -19,7 +19,8 @@
         </div>
 
         <h1 id="message-title">Leave what your heart keeps replaying.</h1>
-        <p class="soft-copy">Say it softly, and let it arrive.</p>
+        <p class="soft-copy">Send a small letter, a memory, or a feeling for their private timeline.</p>
+        <p class="tester-note">Private testing preview. Messages are private inside ForyoU, but not end-to-end encrypted yet.</p>
 
         <form class="stack" id="message-form" novalidate>
           <label class="field-label" for="sender-name">Your name</label>
@@ -38,14 +39,24 @@
             <option value="">Loading inboxes...</option>
           </select>
 
-          <label class="field-label" for="message">Message</label>
+          <label class="field-label" for="message">Letter</label>
           <textarea
             class="textarea"
             id="message"
             name="message"
             maxlength="500"
             rows="8"
+            placeholder="Write it like a note you would fold and keep..."
           ></textarea>
+
+          <details class="memory-options">
+            <summary>Open later / time capsule</summary>
+            <label class="field-label" for="deliver-at">Deliver later</label>
+            <input class="text-input" id="deliver-at" name="deliverAt" type="datetime-local">
+            <label class="field-label" for="memory-date">Memory date</label>
+            <input class="text-input" id="memory-date" name="memoryDate" type="date">
+            <input type="hidden" id="memory-type" name="memoryType" value="letter">
+          </details>
 
           <label class="field-label" for="message-gallery-image">Media</label>
           <div class="photo-actions">
@@ -75,9 +86,14 @@
 
           <button class="button primary-button" type="submit">Send message</button>
         </form>
+        <nav class="trust-links" aria-label="ForyoU trust pages">
+          <a href="/privacy">Privacy</a>
+          <a href="/terms">Terms</a>
+          <a href="/security">Security</a>
+        </nav>
       </section>
     </main>
 
-    <script src="/js/message.js?v=20260516-popups3" defer></script>
+    <script src="/js/message.js?v=20260516-beta" defer></script>
   </body>
 </html>
