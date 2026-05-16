@@ -1,6 +1,6 @@
 # ForyoU
 
-ForyoU is a private, nostalgic messaging website built with Node.js, Express, Socket.IO, and SQLite-style JSON storage locally or Postgres on Render. It has a password-protected secret note page plus logged-in account chats with realtime delivery, media sharing, profiles, voice notes, starred messages, and a warm handwritten-letter style UI.
+ForyoU is a private, nostalgic messaging website built with Node.js, Express, Socket.IO, and SQLite-style JSON storage locally or Postgres on Render. The main public entry is the account login at `/admin`, with logged-in account chats, realtime delivery, media sharing, profiles, voice notes, starred messages, and a warm handwritten-letter style UI.
 
 Locally, data is saved in `data/messages.json`. On Render, the included Blueprint uses Render Postgres through `DATABASE_URL`.
 
@@ -45,9 +45,9 @@ foryou/
 
 ## Features
 
-- Secret private route: `/secret-8392-love-note`
-- Password screen before the public note form
-- Sender name, recipient picker, 500 character limit, and media upload up to 8 MB
+- Main login route: `/admin`
+- Legacy secret route `/secret-8392-love-note` is hidden by default and redirects to `/admin`
+- Logged-in sender, recipient picker, 500 character limit, and media upload up to 8 MB
 - Account login at `/admin`
 - Built-in first-run accounts: `Kabir` / `Kabir@` and `Kaish` / `Kaish@`
 - Realtime chat delivery with Socket.IO
@@ -84,10 +84,10 @@ cp .env.example .env
 Edit `.env`:
 
 ```bash
-MESSAGE_PAGE_PASSWORD=your-secret-page-password
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=your-admin-password
 SESSION_SECRET=generate-a-long-random-string
+ENABLE_SECRET_PAGE=false
 ```
 
 Generate a session secret:
@@ -122,19 +122,18 @@ npm run dev
 
 Open:
 
-- Secret page: `http://localhost:3000/secret-8392-love-note`
-- Account inbox: `http://localhost:3000/admin`
+- Main login/inbox: `http://localhost:3000/admin`
+- Old secret URL redirects to login: `http://localhost:3000/secret-8392-love-note`
 - Profile settings: `http://localhost:3000/profile`
 
 If no `.env` is present, development fallback passwords are:
 
-- Secret page: `open-the-secret-note`
 - Admin account: `admin` / `admin-love-notes`
 
 ## Main Routes
 
 ```text
-GET    /secret-8392-love-note
+GET    /secret-8392-love-note  -> redirects to /admin unless ENABLE_SECRET_PAGE=true
 GET    /admin
 GET    /profile
 POST   /api/login
@@ -173,7 +172,7 @@ attachment=@photo.png
 replyToId=optional-message-id
 ```
 
-Logged-in users can send account-to-account messages from the chat composer; public visitors can send through the secret note page after entering the secret password.
+Logged-in users can send account-to-account messages from the chat composer. Public secret-page sending is disabled unless you intentionally set `ENABLE_SECRET_PAGE=true` and configure `MESSAGE_PAGE_PASSWORD`.
 
 ## Render Deployment
 
@@ -186,7 +185,6 @@ Logged-in users can send account-to-account messages from the chat composer; pub
    - Web service: `foryou`
    - Postgres database: `foryou-db`
 5. When Render asks for secret values, set:
-   - `MESSAGE_PAGE_PASSWORD`
    - `ADMIN_PASSWORD`
    - optional `ACCOUNT_USERS`
 6. Deploy.
@@ -202,7 +200,7 @@ Your live URL may look like `https://foryou-zbm5.onrender.com`; the service name
    - Start Command: `npm start`
 3. Add environment variables:
    - `NODE_ENV=production`
-   - `MESSAGE_PAGE_PASSWORD=your-secret-page-password`
+   - `ENABLE_SECRET_PAGE=false`
    - `ADMIN_USERNAME=admin`
    - `ADMIN_PASSWORD=your-admin-password`
    - `SESSION_SECRET=a-long-random-string`
@@ -213,12 +211,12 @@ Your live URL may look like `https://foryou-zbm5.onrender.com`; the service name
 
 After deployment:
 
-- Secret page: `https://your-render-url/secret-8392-love-note`
-- Account inbox: `https://your-render-url/admin`
+- Main login/inbox: `https://your-render-url/admin`
+- Old secret URL redirects to login: `https://your-render-url/secret-8392-love-note`
 - Profile settings: `https://your-render-url/profile`
 
 ## Privacy Notes
 
-The app saves message text, sender display name, recipient username, timestamps, media URLs or media data, profile settings, and password hashes. Public secret-page messages do not store sender IP, email, or login details.
+The app saves message text, sender display name, recipient username, timestamps, media URLs or media data, profile settings, and password hashes. The secret-note page is hidden by default, so normal message sending happens after account login.
 
 For signed-in accounts, the ultimate admin dashboard transparently stores security analytics: online status, last seen, login/logout/session times, login attempts, device/browser details, screen size, language, timezone, IP address, and approximate IP-based city/country/ISP when available. It does not collect exact GPS, contacts, SMS, calls, IMEI, or private device identifiers. Anonymous Mode still hides online, typing, and read receipts from regular users; only the ultimate admin monitoring dashboard can see true online status for security.

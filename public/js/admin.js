@@ -356,7 +356,7 @@ function messagePreview(message) {
 
 function chatPreview(conversation, peer) {
   if (!conversation.lastMessage) {
-    return peer.username === "__letters__" ? "Secret page notes will appear here" : "Tap to start chatting";
+    return peer.username === "__letters__" ? "Private notes will appear here" : "Tap to start chatting";
   }
 
   const sender =

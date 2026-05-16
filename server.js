@@ -69,6 +69,7 @@ const io = new Server(httpServer, {
 
 const PORT = Number(process.env.PORT || 3000);
 const SECRET_PATH = "/secret-8392-love-note";
+const SECRET_PAGE_ENABLED = process.env.ENABLE_SECRET_PAGE === "true";
 const isProduction = process.env.NODE_ENV === "production";
 const ACTIVE_WINDOW_MS = 1000 * 60 * 2;
 const ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
@@ -168,10 +169,9 @@ function requiredSecret(name, fallback) {
   return fallback;
 }
 
-const MESSAGE_PAGE_PASSWORD = requiredSecret(
-  "MESSAGE_PAGE_PASSWORD",
-  "open-the-secret-note"
-);
+const MESSAGE_PAGE_PASSWORD = SECRET_PAGE_ENABLED
+  ? requiredSecret("MESSAGE_PAGE_PASSWORD", "open-the-secret-note")
+  : "";
 const ADMIN_PASSWORD = requiredSecret("ADMIN_PASSWORD", "admin-love-notes");
 const SESSION_SECRET = requiredSecret(
   "SESSION_SECRET",
@@ -331,12 +331,12 @@ function safeCompare(received, expected) {
 }
 
 function requireSecretAccess(req, res, next) {
-  if (req.session.secretUnlocked === true) {
+  if (SECRET_PAGE_ENABLED && req.session.secretUnlocked === true) {
     return next();
   }
 
   noStore(res);
-  return res.status(401).json({ error: "Please unlock the private page first." });
+  return res.status(404).json({ error: "The private note page is not available." });
 }
 
 function requireAccount(req, res, next) {
@@ -358,12 +358,16 @@ function requireUltimateAdmin(req, res, next) {
 }
 
 function requireMessageAccess(req, res, next) {
-  if (req.session.secretUnlocked === true || (req.session.accountUser && req.session.accountUser.username)) {
+  if (req.session.accountUser && req.session.accountUser.username) {
+    return next();
+  }
+
+  if (SECRET_PAGE_ENABLED && req.session.secretUnlocked === true) {
     return next();
   }
 
   noStore(res);
-  return res.status(401).json({ error: "Please unlock the page or log in first." });
+  return res.status(401).json({ error: "Please log in to send messages." });
 }
 
 function cleanText(input) {
@@ -1119,10 +1123,15 @@ app.get("/robots.txt", (req, res) => {
 
 app.get("/", (req, res) => {
   noStore(res);
-  res.redirect(302, SECRET_PATH);
+  res.redirect(302, "/admin");
 });
 
 app.get(SECRET_PATH, (req, res) => {
+  if (!SECRET_PAGE_ENABLED) {
+    noStore(res);
+    return res.redirect(302, "/admin");
+  }
+
   if (req.session.secretUnlocked === true) {
     return sendView(res, "message.html");
   }
@@ -1203,6 +1212,10 @@ app.post("/api/login", loginLimiter, async (req, res, next) => {
     }
 
     if (scope === "secret") {
+      if (!SECRET_PAGE_ENABLED) {
+        return res.status(404).json({ error: "The private note page is not available." });
+      }
+
       if (!safeCompare(password, MESSAGE_PAGE_PASSWORD)) {
         return res.status(401).json({ error: "That password is not right yet." });
       }
@@ -1579,7 +1592,7 @@ app.get("/api/chats", requireAccount, async (req, res, next) => {
           ? {
               username: "__letters__",
               displayName: "Anonymous letters",
-              bio: "Notes sent through your private page.",
+              bio: "Private notes saved in your inbox.",
               profileImageData: "",
               anonymousMode: true,
               isActive: false
@@ -2015,9 +2028,13 @@ initStore()
     }, 60 * 1000);
 
     httpServer.listen(PORT, () => {
-      console.log(`Private anonymous messaging site running on http://localhost:${PORT}`);
-      console.log(`Secret page: http://localhost:${PORT}${SECRET_PATH}`);
-      console.log(`Admin page: http://localhost:${PORT}/admin`);
+      console.log(`ForyoU running on http://localhost:${PORT}`);
+      console.log(`Login page: http://localhost:${PORT}/admin`);
+      if (SECRET_PAGE_ENABLED) {
+        console.log(`Secret page: http://localhost:${PORT}${SECRET_PATH}`);
+      } else {
+        console.log(`Secret page disabled; ${SECRET_PATH} redirects to /admin`);
+      }
     });
   })
   .catch((error) => {
