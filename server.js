@@ -17,9 +17,11 @@ const { Server } = require("socket.io");
 const {
   addMessage,
   authenticateUser,
+  cleanupExpiredNotifications,
   countActiveNotifications,
   cleanupAnalyticsLogs,
   cleanupExpiredMessages,
+  cleanupStorageLogs,
   createNotificationAlert,
   deleteMessage,
   deleteNotificationAlert,
@@ -28,10 +30,12 @@ const {
   findNotificationAlert,
   findUser,
   findAccessibleMessage,
+  getStorageSummary,
   getUltimateAdminMonitoring,
   getUserAvatar,
   heartbeatUserSession,
   initStore,
+  isRestrictedSearchTerm,
   listNotificationHistory,
   listUserLoginHistory,
   listChatSummaries,
@@ -55,6 +59,8 @@ const {
   updateUserAvatar,
   updateUserPassword,
   updateUserProfile,
+  updateUserSearchVisibility,
+  userHasConversation,
   updateUserSettings
 } = require("./src/storage/messages");
 
@@ -76,7 +82,8 @@ const ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
 const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
 const USER_LIST_CACHE_MS = 5000;
 const USER_LIST_LIMIT = 200;
-const MESSAGE_PAGE_LIMIT = 80;
+const MESSAGE_PAGE_LIMIT = 50;
+const CHAT_LIST_LIMIT = 50;
 const ADMIN_ROOM = "ultimate-admins";
 const CLOUDINARY_ENABLED = Boolean(
   process.env.CLOUDINARY_URL ||
@@ -293,6 +300,17 @@ const analyticsLimiter = rateLimit({
   }
 });
 
+const searchLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 30,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  keyGenerator: sessionKey,
+  message: {
+    error: "Too many searches. Please wait a moment."
+  }
+});
+
 app.use(
   express.static(path.join(__dirname, "public"), {
     etag: true,
@@ -339,27 +357,64 @@ function requireSecretAccess(req, res, next) {
   return res.status(404).json({ error: "The private note page is not available." });
 }
 
-function requireAccount(req, res, next) {
-  if (req.session.accountUser && req.session.accountUser.username) {
-    return next();
-  }
-
-  noStore(res);
-  return res.status(401).json({ error: "Please log in to your inbox." });
+async function endRestrictedSession(req, username) {
+  activeUsers.delete(username);
+  await endUserSession(username, req.sessionID);
+  invalidateUserCache();
+  schedulePresenceUpdate();
+  scheduleAdminMonitoringUpdate();
+  req.session.destroy(() => {});
 }
 
-function requireUltimateAdmin(req, res, next) {
-  if (req.session.accountUser && isUltimateAdmin(req.session.accountUser)) {
-    return next();
+async function requireAccount(req, res, next) {
+  const username = normalizeUsername(req.session.accountUser && req.session.accountUser.username);
+
+  if (!username) {
+    noStore(res);
+    return res.status(401).json({ error: "Please log in to your inbox." });
   }
 
-  noStore(res);
-  return res.status(403).json({ error: "Ultimate admin access is required." });
+  try {
+    const user = await findUser(username);
+
+    if (!user) {
+      await endRestrictedSession(req, username);
+      noStore(res);
+      return res.status(401).json({ error: "Please log in to your inbox." });
+    }
+
+    if (isAccountBlocked(user)) {
+      await endRestrictedSession(req, username);
+      noStore(res);
+      return res.status(403).json({ error: accountBlockedMessage(user) });
+    }
+
+    req.session.accountUser = publicAccount(user);
+    markUserActive(req.session.accountUser);
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function requireUltimateAdmin(req, res, next) {
+  return requireAccount(req, res, (error) => {
+    if (error) {
+      return next(error);
+    }
+
+    if (isUltimateAdmin(req.session.accountUser)) {
+      return next();
+    }
+
+    noStore(res);
+    return res.status(403).json({ error: "Ultimate admin access is required." });
+  });
 }
 
 function requireMessageAccess(req, res, next) {
   if (req.session.accountUser && req.session.accountUser.username) {
-    return next();
+    return requireAccount(req, res, next);
   }
 
   if (SECRET_PAGE_ENABLED && req.session.secretUnlocked === true) {
@@ -886,6 +941,7 @@ function publicAccount(user) {
     accountStatus: user.accountStatus || user.account_status || "active",
     suspendedUntil: user.suspendedUntil || user.suspended_until || null,
     blockedReason: user.blockedReason || user.blocked_reason || "",
+    searchHidden: Boolean(user.searchHidden || user.search_hidden),
     isActive: !anonymousMode && isUserActive(username)
   };
 }
@@ -904,8 +960,37 @@ function publicRecipient(user, viewer = null) {
     hasProfileImage: account.hasProfileImage,
     profileImageUrl: account.profileImageUrl,
     anonymousMode: account.anonymousMode,
-    isActive: isUltimateAdmin(viewer) ? realActive : account.isActive
+    searchHidden: isUltimateAdmin(viewer) ? account.searchHidden : false,
+    isActive: isUltimateAdmin(viewer) ? realActive : false
   };
+}
+
+function publicSearchUser(user) {
+  const account = publicRecipient(user, null);
+
+  return {
+    username: account.username,
+    displayName: account.displayName,
+    bio: account.bio,
+    hasProfileImage: account.hasProfileImage,
+    profileImageUrl: account.profileImageUrl
+  };
+}
+
+function rememberAllowedChat(req, username) {
+  const normalizedUsername = normalizeUsername(username);
+
+  if (!normalizedUsername) {
+    return;
+  }
+
+  const existing = Array.isArray(req.session.allowedChatUsers) ? req.session.allowedChatUsers : [];
+  req.session.allowedChatUsers = Array.from(new Set([...existing, normalizedUsername])).slice(-50);
+}
+
+function hasAllowedChat(req, username) {
+  const normalizedUsername = normalizeUsername(username);
+  return (Array.isArray(req.session.allowedChatUsers) ? req.session.allowedChatUsers : []).includes(normalizedUsername);
 }
 
 function invalidateUserCache() {
@@ -1068,15 +1153,26 @@ function emitMessageMutation(message, eventName) {
   io.to(userRoom(message.recipientUsername)).emit(eventName, { message });
 }
 
-io.use((socket, next) => {
+io.use(async (socket, next) => {
   const accountUser = socket.request.session && socket.request.session.accountUser;
 
   if (!accountUser || !accountUser.username) {
     return next(new Error("unauthorized"));
   }
 
-  socket.accountUser = publicAccount(accountUser);
-  return next();
+  try {
+    const user = await findUser(accountUser.username);
+
+    if (!user || isAccountBlocked(user)) {
+      return next(new Error("unauthorized"));
+    }
+
+    socket.request.session.accountUser = publicAccount(user);
+    socket.accountUser = publicAccount(user);
+    return next();
+  } catch (error) {
+    return next(error);
+  }
 });
 
 io.on("connection", (socket) => {
@@ -1269,6 +1365,24 @@ app.post("/api/message", requireMessageAccess, messageLimiter, handleMessageUplo
       return res.status(400).json({ error: "Please choose a valid recipient." });
     }
 
+    if (accountUser && !isUltimateAdmin(accountUser)) {
+      const existingConversation = await userHasConversation(senderUsername, recipient.username);
+      const searchedThisSession = hasAllowedChat(req, recipient.username);
+      const restrictedTarget =
+        recipient.username === senderUsername ||
+        recipient.role === "ultimate_admin" ||
+        recipient.searchHidden ||
+        isAccountBlocked(recipient);
+
+      if (restrictedTarget && !existingConversation) {
+        return res.status(403).json({ error: "NOT ALLOWED" });
+      }
+
+      if (!existingConversation && !searchedThisSession) {
+        return res.status(403).json({ error: "Enter exact username before starting chat." });
+      }
+    }
+
     if (replyToId) {
       const replyTarget = await findAccessibleMessage(replyToId, accountUser ? accountUser.username : recipient.username);
 
@@ -1308,8 +1422,66 @@ app.get("/api/recipients", requireMessageAccess, async (req, res, next) => {
   try {
     noStore(res);
     const viewer = req.session.accountUser || null;
-    const recipients = (await getCachedUsers()).map((user) => publicRecipient(user, viewer));
+    const currentUsername = normalizeUsername(viewer && viewer.username);
+    const users = await getCachedUsers();
+    let visibleUsers = users;
+
+    if (viewer && !isUltimateAdmin(viewer)) {
+      const summaries = await listChatSummaries(currentUsername, { limit: CHAT_LIST_LIMIT });
+      const existingPeers = new Set(
+        summaries
+          .map((summary) => normalizeUsername(summary.peerUsername))
+          .filter((username) => username && username !== "__letters__")
+      );
+      visibleUsers = users.filter((user) => existingPeers.has(user.username));
+    }
+
+    const recipients = visibleUsers
+      .filter((user) => user.username !== currentUsername)
+      .map((user) => publicRecipient(user, viewer));
     return res.json({ recipients });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get("/api/users/search", requireAccount, searchLimiter, async (req, res, next) => {
+  try {
+    noStore(res);
+    const viewer = req.session.accountUser;
+    const rawUsername = cleanText(String(req.query.username || "")).slice(0, 64);
+    const username = normalizeUsername(rawUsername);
+
+    if (!username || rawUsername.trim().toLowerCase() !== username) {
+      return res.json({ ok: false, error: "User not found" });
+    }
+
+    if (!isUltimateAdmin(viewer) && (await isRestrictedSearchTerm(username))) {
+      return res.json({ ok: false, error: "NOT ALLOWED" });
+    }
+
+    const user = await findUser(username);
+
+    if (!user) {
+      return res.json({ ok: false, error: "User not found" });
+    }
+
+    const restricted =
+      !isUltimateAdmin(viewer) &&
+      (user.username === normalizeUsername(viewer.username) ||
+        user.searchHidden ||
+        user.role === "ultimate_admin" ||
+        isAccountBlocked(user));
+
+    if (restricted) {
+      return res.json({ ok: false, error: "NOT ALLOWED" });
+    }
+
+    rememberAllowedChat(req, user.username);
+    return res.json({
+      ok: true,
+      user: publicSearchUser(user)
+    });
   } catch (error) {
     return next(error);
   }
@@ -1335,6 +1507,18 @@ app.get("/api/session", async (req, res, next) => {
 
   try {
     if (req.session.accountUser && req.session.accountUser.username) {
+      const username = normalizeUsername(req.session.accountUser.username);
+      const user = await findUser(username);
+
+      if (!user || isAccountBlocked(user)) {
+        await endRestrictedSession(req, username);
+        return res.status(user ? 403 : 401).json({
+          error: user ? accountBlockedMessage(user) : "Please log in to your inbox.",
+          user: null
+        });
+      }
+
+      req.session.accountUser = publicAccount(user);
       await heartbeatUserSession(req.session.accountUser.username, req.sessionID);
       markUserActive(req.session.accountUser);
     }
@@ -1579,7 +1763,7 @@ app.get("/api/chats", requireAccount, async (req, res, next) => {
   try {
     noStore(res);
     const [summaries, users] = await Promise.all([
-      listChatSummaries(req.session.accountUser.username, { limit: 80 }),
+      listChatSummaries(req.session.accountUser.username, { limit: CHAT_LIST_LIMIT }),
       getCachedUsers()
     ]);
     const userMap = new Map(
@@ -1708,6 +1892,11 @@ app.post("/api/messages/:id/reactions", requireAccount, async (req, res, next) =
 app.get("/api/active-friends", requireAccount, async (req, res, next) => {
   try {
     noStore(res);
+
+    if (!isUltimateAdmin(req.session.accountUser)) {
+      return res.json({ users: [] });
+    }
+
     const current = normalizeUsername(req.session.accountUser.username);
     const users = (await getCachedUsers())
       .filter((user) => user.role !== "ultimate_admin" || isUltimateAdmin(req.session.accountUser))
@@ -1753,6 +1942,34 @@ app.get("/api/admin/monitoring", requireUltimateAdmin, analyticsLimiter, async (
       notice:
         "This dashboard shows transparent security monitoring data for signed-in accounts. Anonymous Mode is still hidden from regular users."
     });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get("/api/admin/storage-summary", requireUltimateAdmin, analyticsLimiter, async (req, res, next) => {
+  try {
+    noStore(res);
+    const summary = await getStorageSummary();
+    return res.json({ ok: true, summary });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post("/api/admin/cleanup-storage", requireUltimateAdmin, analyticsLimiter, async (req, res, next) => {
+  try {
+    noStore(res);
+
+    if (!req.body || req.body.confirm !== true) {
+      return res.status(400).json({
+        error: "This deletes logs only. Messages, users, memories and media stay safe."
+      });
+    }
+
+    const result = await cleanupStorageLogs();
+    scheduleAdminMonitoringUpdate();
+    return res.json(result);
   } catch (error) {
     return next(error);
   }
@@ -1937,6 +2154,34 @@ app.patch("/api/admin/users/:username/security", requireUltimateAdmin, analytics
   }
 });
 
+app.patch("/api/admin/users/:username/search-visibility", requireUltimateAdmin, analyticsLimiter, async (req, res, next) => {
+  try {
+    noStore(res);
+    const targetUsername = normalizeUsername(req.params.username);
+    const searchHidden = Boolean(req.body && req.body.searchHidden);
+
+    const updated = await updateUserSearchVisibility(targetUsername, searchHidden);
+
+    if (!updated) {
+      return res.status(404).json({ error: "Account was not found." });
+    }
+
+    await logAdminAction({
+      adminUsername: req.session.accountUser.username,
+      action: searchHidden ? "hide_from_search" : "allow_search",
+      targetUsername,
+      details: { searchHidden },
+      ipAddress: getClientIp(req)
+    });
+
+    invalidateUserCache();
+    scheduleAdminMonitoringUpdate();
+    return res.json({ ok: true, user: publicRecipient(updated, req.session.accountUser) });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 app.get("/api/messages", requireAccount, async (req, res, next) => {
   try {
     noStore(res);
@@ -2012,6 +2257,9 @@ initStore()
       });
       cleanupAnalyticsLogs().catch((error) => {
         console.error("Analytics cleanup failed.", error);
+      });
+      cleanupExpiredNotifications().catch((error) => {
+        console.error("Notification cleanup failed.", error);
       });
     }, 60 * 60 * 1000);
 

@@ -47,11 +47,10 @@
             </button>
           </div>
 
-          <p class="drawer-label sidebar-label">Active now</p>
-          <div class="active-strip" id="active-friends" aria-label="Active friends"></div>
-
           <div class="search-wrap">
-            <input class="text-input compact-input" id="chat-search" type="search" placeholder="Search chats">
+            <input class="text-input compact-input" id="chat-search" type="search" placeholder="Enter exact username" autocomplete="off">
+            <div class="user-search-result is-hidden" id="user-search-result"></div>
+            <p class="form-message" id="user-search-status" role="status" aria-live="polite"></p>
           </div>
 
           <p class="drawer-label sidebar-label">New texts</p>
@@ -146,25 +145,10 @@
               <div>
                 <p class="eyebrow">Profile</p>
                 <div class="drawer-user-row">
-                  <span class="presence-dot is-active" id="account-presence-dot" aria-hidden="true"></span>
                   <h2 id="inbox-user">Signed in</h2>
                 </div>
               </div>
               <button class="close-button" id="account-menu-close" type="button" aria-label="Close account menu">Close</button>
-            </div>
-            <p class="presence-line drawer-presence"><span id="active-status">Active now</span></p>
-
-            <div class="drawer-section">
-              <p class="drawer-label">Privacy</p>
-              <label class="toggle-row" for="anonymous-mode-toggle">
-                <input id="anonymous-mode-toggle" type="checkbox">
-                <span>
-                  <strong>Anonymous Mode</strong>
-                  <small>Hides active status, typing, and read receipts.</small>
-                </span>
-                <span class="toggle-track" aria-hidden="true"></span>
-              </label>
-              <p class="file-hint" id="privacy-status"></p>
             </div>
 
             <div class="drawer-section admin-monitoring is-hidden" id="ultimate-admin-panel">
@@ -173,8 +157,11 @@
 
               <div class="monitor-stats" id="monitor-stats" aria-label="Security monitoring stats"></div>
               <div class="monitor-toolbar">
+                <button class="button secondary-button compact-button" id="cleanup-storage-button" type="button">Clean Storage</button>
                 <button class="button secondary-button compact-button" id="monitor-refresh-button" type="button">Update</button>
               </div>
+              <p class="file-hint cleanup-warning">This deletes logs only. Messages, users, memories and media stay safe.</p>
+              <p class="form-message" id="cleanup-storage-status" role="status" aria-live="polite"></p>
 
               <p class="drawer-label">Popup alerts</p>
               <form class="notification-admin-form" id="notification-form">

@@ -57,6 +57,20 @@ function clampLimit(value, fallback = 80, max = 200) {
   return Math.min(Math.floor(parsed), max);
 }
 
+function formatBytes(bytes) {
+  const value = Number(bytes || 0);
+  const units = ["B", "KB", "MB", "GB"];
+  let size = Number.isFinite(value) ? value : 0;
+  let index = 0;
+
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024;
+    index += 1;
+  }
+
+  return `${size.toFixed(index === 0 ? 0 : 2)} ${units[index]}`;
+}
+
 function hasProfileImage(user) {
   return Boolean(
     user.profileImageData ||
@@ -246,6 +260,7 @@ function normalizeUser(user) {
     suspendedUntil: user.suspendedUntil || user.suspended_until || null,
     blockedAt: user.blockedAt || user.blocked_at || null,
     blockedReason: user.blockedReason || user.blocked_reason || "",
+    searchHidden: Boolean(user.searchHidden || user.search_hidden),
     passwordChangedAt: user.passwordChangedAt || user.password_changed_at || null,
     createdAt: user.createdAt || user.created_at || new Date().toISOString()
   };
@@ -265,6 +280,8 @@ function normalizeStore(rawStore) {
     activitySessions: Array.isArray(rawStore.activitySessions) ? rawStore.activitySessions : [],
     loginHistory: Array.isArray(rawStore.loginHistory) ? rawStore.loginHistory : [],
     adminActionLogs: Array.isArray(rawStore.adminActionLogs) ? rawStore.adminActionLogs : [],
+    auditLogs: Array.isArray(rawStore.auditLogs) ? rawStore.auditLogs : [],
+    restrictedSearchTerms: Array.isArray(rawStore.restrictedSearchTerms) ? rawStore.restrictedSearchTerms : [],
     notificationAlerts: Array.isArray(rawStore.notificationAlerts)
       ? rawStore.notificationAlerts.map(normalizeNotification)
       : []
@@ -421,7 +438,8 @@ async function setupPostgresStore() {
     ADD COLUMN IF NOT EXISTS is_shadow_banned BOOLEAN NOT NULL DEFAULT false,
     ADD COLUMN IF NOT EXISTS suspended_until TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS blocked_at TIMESTAMPTZ,
-    ADD COLUMN IF NOT EXISTS blocked_reason TEXT NOT NULL DEFAULT ''
+    ADD COLUMN IF NOT EXISTS blocked_reason TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS search_hidden BOOLEAN NOT NULL DEFAULT false
   `);
 
   await pool.query(`
@@ -638,6 +656,22 @@ async function setupPostgresStore() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS restricted_search_terms (
+      id TEXT PRIMARY KEY DEFAULT md5(random()::text || clock_timestamp()::text),
+      term TEXT NOT NULL UNIQUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      created_by TEXT NOT NULL DEFAULT 'system'
+    )
+  `);
+
+  await pool.query(`
+    ALTER TABLE restricted_search_terms
+    ADD COLUMN IF NOT EXISTS term TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT 'system'
+  `);
+
+  await pool.query(`
     ALTER TABLE notification_alerts
     ADD COLUMN IF NOT EXISTS recipient_username TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS title TEXT NOT NULL DEFAULT '',
@@ -675,6 +709,7 @@ async function setupPostgresStore() {
   await pool.query("CREATE INDEX IF NOT EXISTS idx_inbox_users_is_online ON inbox_users (is_online)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_inbox_users_last_seen ON inbox_users (last_seen DESC)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_inbox_users_account_status ON inbox_users (account_status)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_inbox_users_search_hidden ON inbox_users (search_hidden)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_messages_sender_username ON messages (sender_username)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_messages_recipient_username ON messages (recipient_username)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages (created_at DESC)");
@@ -701,9 +736,10 @@ async function setupPostgresStore() {
   );
   await pool.query("CREATE INDEX IF NOT EXISTS idx_notification_alerts_created ON notification_alerts (created_at DESC)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_notification_alerts_expires ON notification_alerts (expires_at)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_restricted_search_terms_term ON restricted_search_terms (term)");
 
   await cleanupAnalyticsLogs();
-
+  await seedRestrictedSearchTerms();
   await seedUsers();
 
   try {
@@ -733,6 +769,7 @@ async function setupJsonStore() {
 
   const store = await readJsonStore(false);
   await writeJsonStore(store);
+  await seedRestrictedSearchTerms();
   await seedUsers();
 }
 
@@ -838,6 +875,42 @@ async function seedUsers() {
   });
 }
 
+async function seedRestrictedSearchTerms() {
+  const terms = ["admin", "owner", "ultimate_admin", "support", "system"];
+
+  if (usePostgres) {
+    await pool.query(
+      `
+        INSERT INTO restricted_search_terms (term, created_by)
+        SELECT LOWER(term), 'system'
+        FROM UNNEST($1::text[]) AS term
+        ON CONFLICT (term) DO NOTHING
+      `,
+      [terms]
+    );
+    return;
+  }
+
+  await queuedWrite(async () => {
+    const store = await readJsonStore(false);
+    const existing = new Set((store.restrictedSearchTerms || []).map((item) => String(item.term || "").toLowerCase()));
+    store.restrictedSearchTerms = store.restrictedSearchTerms || [];
+
+    for (const term of terms) {
+      if (!existing.has(term)) {
+        store.restrictedSearchTerms.push({
+          id: crypto.randomUUID(),
+          term,
+          createdAt: new Date().toISOString(),
+          createdBy: "system"
+        });
+      }
+    }
+
+    await writeJsonStore(store);
+  });
+}
+
 async function listUsers(options = {}) {
   await initStore();
   const limit = clampLimit(options.limit, 200, 500);
@@ -866,6 +939,7 @@ async function listUsers(options = {}) {
         suspended_until AS "suspendedUntil",
         blocked_at AS "blockedAt",
         blocked_reason AS "blockedReason",
+        search_hidden AS "searchHidden",
         created_at AS "createdAt"
       FROM inbox_users
       ORDER BY display_name ASC, username ASC
@@ -929,7 +1003,8 @@ async function findUser(username, options = {}) {
           is_shadow_banned AS "isShadowBanned",
           suspended_until AS "suspendedUntil",
           blocked_at AS "blockedAt",
-          blocked_reason AS "blockedReason"
+          blocked_reason AS "blockedReason",
+          search_hidden AS "searchHidden"
         FROM inbox_users
         WHERE username = $1
       `,
@@ -988,7 +1063,8 @@ async function authenticateUser(username, password) {
     isShadowBanned: user.isShadowBanned,
     suspendedUntil: user.suspendedUntil,
     blockedAt: user.blockedAt,
-    blockedReason: user.blockedReason
+    blockedReason: user.blockedReason,
+    searchHidden: user.searchHidden
   };
 }
 
@@ -1183,7 +1259,8 @@ async function updateUserSettings(username, settings = {}) {
           is_shadow_banned AS "isShadowBanned",
           suspended_until AS "suspendedUntil",
           blocked_at AS "blockedAt",
-          blocked_reason AS "blockedReason"
+          blocked_reason AS "blockedReason",
+          search_hidden AS "searchHidden"
       `,
       [
         nextSettings.displayName,
@@ -1268,7 +1345,8 @@ async function updateUserAvatar(username, avatar = null) {
           is_shadow_banned AS "isShadowBanned",
           suspended_until AS "suspendedUntil",
           blocked_at AS "blockedAt",
-          blocked_reason AS "blockedReason"
+          blocked_reason AS "blockedReason",
+          search_hidden AS "searchHidden"
       `,
       [image.data || "", image.url || "", image.mime || "", image.name || "", normalizedUsername]
     );
@@ -1384,6 +1462,61 @@ async function cleanupExpiredMessages() {
   });
 }
 
+async function isRestrictedSearchTerm(term) {
+  const normalizedTerm = normalizeUsername(term);
+
+  if (!normalizedTerm) {
+    return false;
+  }
+
+  await initStore();
+
+  if (usePostgres) {
+    const result = await pool.query(
+      "SELECT 1 FROM restricted_search_terms WHERE term = $1 LIMIT 1",
+      [normalizedTerm]
+    );
+    return result.rowCount > 0;
+  }
+
+  const store = await readJsonStore();
+  return (store.restrictedSearchTerms || []).some(
+    (item) => normalizeUsername(item.term) === normalizedTerm
+  );
+}
+
+async function userHasConversation(username, peerUsername) {
+  const owner = normalizeUsername(username);
+  const peer = normalizeUsername(peerUsername);
+
+  if (!owner || !peer) {
+    return false;
+  }
+
+  await initStore();
+
+  if (usePostgres) {
+    const result = await pool.query(
+      `
+        SELECT 1
+        FROM messages
+        WHERE (sender_username = $1 AND recipient_username = $2)
+           OR (sender_username = $2 AND recipient_username = $1)
+        LIMIT 1
+      `,
+      [owner, peer]
+    );
+    return result.rowCount > 0;
+  }
+
+  const store = await readJsonStore();
+  return store.messages.some(
+    (message) =>
+      (message.senderUsername === owner && message.recipientUsername === peer) ||
+      (message.senderUsername === peer && message.recipientUsername === owner)
+  );
+}
+
 function filterMessagesBySearch(messages, query) {
   const search = String(query || "").trim().toLowerCase();
 
@@ -1403,7 +1536,7 @@ async function listConversationMessages(username, peerUsername, query = "") {
   const peer = normalizeUsername(peerUsername);
   const options = typeof query === "object" && query !== null ? query : {};
   const searchQuery = typeof query === "object" && query !== null ? options.query || "" : query;
-  const limit = clampLimit(options.limit, 80, 200);
+  const limit = clampLimit(options.limit, 50, 100);
   const before = options.before ? new Date(options.before) : null;
   await cleanupExpiredMessages();
 
@@ -1485,7 +1618,7 @@ async function listLetterMessages(username, query = "") {
   const owner = normalizeUsername(username);
   const options = typeof query === "object" && query !== null ? query : {};
   const searchQuery = typeof query === "object" && query !== null ? options.query || "" : query;
-  const limit = clampLimit(options.limit, 80, 200);
+  const limit = clampLimit(options.limit, 50, 100);
   const before = options.before ? new Date(options.before) : null;
   await cleanupExpiredMessages();
 
@@ -1559,7 +1692,7 @@ async function listLetterMessages(username, query = "") {
 
 async function listChatSummaries(username, options = {}) {
   const owner = normalizeUsername(username);
-  const limit = clampLimit(options.limit, 80, 200);
+  const limit = clampLimit(options.limit, 50, 100);
   await cleanupExpiredMessages();
 
   const allMessages = usePostgres
@@ -2084,7 +2217,7 @@ async function deleteMessage(id, username) {
 }
 
 async function cleanupAnalyticsLogs() {
-  const retentionDays = Math.max(7, Number(process.env.ANALYTICS_RETENTION_DAYS || 45));
+  const retentionDays = Math.max(7, Number(process.env.ANALYTICS_RETENTION_DAYS || 30));
 
   if (usePostgres) {
     await pool.query(
@@ -2117,11 +2250,202 @@ async function cleanupAnalyticsLogs() {
     const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
     store.loginHistory = (store.loginHistory || []).filter((item) => new Date(item.createdAt).getTime() >= cutoff);
     store.adminActionLogs = (store.adminActionLogs || []).filter((item) => new Date(item.createdAt).getTime() >= cutoff);
+    store.auditLogs = (store.auditLogs || []).filter((item) => new Date(item.createdAt).getTime() >= cutoff);
     store.activitySessions = (store.activitySessions || []).filter(
       (item) => item.isActive || new Date(item.createdAt).getTime() >= cutoff
     );
     await writeJsonStore(store);
   });
+}
+
+async function cleanupExpiredNotifications() {
+  const now = Date.now();
+
+  await initStore();
+
+  if (usePostgres) {
+    await pool.query(
+      `
+        DELETE FROM notification_alerts
+        WHERE (expires_at IS NOT NULL AND expires_at < NOW())
+           OR (seen = true AND created_at < NOW() - INTERVAL '30 days')
+      `
+    );
+    return;
+  }
+
+  await queuedWrite(async () => {
+    const store = await readJsonStore(false);
+    const cutoff = now - 30 * 24 * 60 * 60 * 1000;
+    store.notificationAlerts = (store.notificationAlerts || []).filter((notification) => {
+      const expiresAt = notification.expiresAt ? new Date(notification.expiresAt).getTime() : 0;
+      const createdAt = new Date(notification.createdAt || 0).getTime();
+      return !(expiresAt && expiresAt < now) && !(notification.seen && createdAt < cutoff);
+    });
+    await writeJsonStore(store);
+  });
+}
+
+async function getStorageSummary() {
+  await initStore();
+
+  if (usePostgres) {
+    const tableNames = [
+      "inbox_users",
+      "messages",
+      "notification_alerts",
+      "audit_logs",
+      "admin_action_logs",
+      "login_history",
+      "user_activity_sessions"
+    ];
+    const result = await pool.query(
+      `
+        SELECT
+          table_name,
+          COALESCE(pg_total_relation_size(to_regclass(table_name)), 0)::bigint AS bytes,
+          CASE
+            WHEN to_regclass(table_name) IS NULL THEN 0
+            ELSE (
+              CASE table_name
+                WHEN 'inbox_users' THEN (SELECT COUNT(*) FROM inbox_users)
+                WHEN 'messages' THEN (SELECT COUNT(*) FROM messages)
+                WHEN 'notification_alerts' THEN (SELECT COUNT(*) FROM notification_alerts)
+                WHEN 'audit_logs' THEN (SELECT COUNT(*) FROM audit_logs)
+                WHEN 'admin_action_logs' THEN (SELECT COUNT(*) FROM admin_action_logs)
+                WHEN 'login_history' THEN (SELECT COUNT(*) FROM login_history)
+                WHEN 'user_activity_sessions' THEN (SELECT COUNT(*) FROM user_activity_sessions)
+                ELSE 0
+              END
+            )
+          END::bigint AS rows
+        FROM UNNEST($1::text[]) AS tables(table_name)
+      `,
+      [tableNames]
+    );
+    const tables = result.rows.map((row) => ({
+      name: row.table_name,
+      rows: Number(row.rows || 0),
+      bytes: Number(row.bytes || 0)
+    }));
+    const totalBytes = tables.reduce((sum, table) => sum + table.bytes, 0);
+
+    return {
+      generatedAt: new Date().toISOString(),
+      storage: "postgres",
+      totalBytes,
+      prettyTotal: formatBytes(totalBytes),
+      tables
+    };
+  }
+
+  const store = await readJsonStore();
+  let fileBytes = 0;
+
+  try {
+    fileBytes = (await fs.stat(messagesFile)).size;
+  } catch {
+    fileBytes = Buffer.byteLength(JSON.stringify(store));
+  }
+
+  return {
+    generatedAt: new Date().toISOString(),
+    storage: "json",
+    totalBytes: fileBytes,
+    prettyTotal: formatBytes(fileBytes),
+    tables: [
+      { name: "inbox_users", rows: store.users.length, bytes: 0 },
+      { name: "messages", rows: store.messages.length, bytes: 0 },
+      { name: "notification_alerts", rows: (store.notificationAlerts || []).length, bytes: 0 },
+      { name: "audit_logs", rows: (store.auditLogs || []).length, bytes: 0 },
+      { name: "admin_action_logs", rows: (store.adminActionLogs || []).length, bytes: 0 },
+      { name: "login_history", rows: (store.loginHistory || []).length, bytes: 0 },
+      { name: "user_activity_sessions", rows: (store.activitySessions || []).length, bytes: 0 }
+    ]
+  };
+}
+
+async function cleanupStorageLogs() {
+  await initStore();
+  const before = await getStorageSummary();
+  const rowsRemoved = {
+    auditLogs: 0,
+    adminActionLogs: 0,
+    loginHistory: 0,
+    userActivitySessions: 0,
+    notificationAlerts: 0
+  };
+
+  if (usePostgres) {
+    const counts = await pool.query(
+      `
+        SELECT 'auditLogs' AS key, COUNT(*)::integer AS count FROM audit_logs
+        UNION ALL SELECT 'adminActionLogs', COUNT(*)::integer FROM admin_action_logs
+        UNION ALL SELECT 'loginHistory', COUNT(*)::integer FROM login_history
+        UNION ALL SELECT 'userActivitySessions', COUNT(*)::integer FROM user_activity_sessions
+      `
+    );
+
+    for (const row of counts.rows) {
+      rowsRemoved[row.key] = Number(row.count || 0);
+    }
+
+    const notificationDelete = await pool.query(
+      `
+        DELETE FROM notification_alerts
+        WHERE seen = true
+           OR (expires_at IS NOT NULL AND expires_at < NOW())
+      `
+    );
+    rowsRemoved.notificationAlerts = notificationDelete.rowCount || 0;
+
+    await pool.query("TRUNCATE audit_logs, admin_action_logs, login_history, user_activity_sessions");
+    await pool.query("VACUUM ANALYZE notification_alerts").catch(() => {});
+  } else {
+    await queuedWrite(async () => {
+      const store = await readJsonStore(false);
+      const now = Date.now();
+
+      rowsRemoved.auditLogs = (store.auditLogs || []).length;
+      rowsRemoved.adminActionLogs = (store.adminActionLogs || []).length;
+      rowsRemoved.loginHistory = (store.loginHistory || []).length;
+      rowsRemoved.userActivitySessions = (store.activitySessions || []).length;
+
+      const activeNotifications = [];
+      for (const notification of store.notificationAlerts || []) {
+        const expiresAt = notification.expiresAt ? new Date(notification.expiresAt).getTime() : 0;
+        const shouldDelete = notification.seen || (expiresAt && expiresAt < now);
+
+        if (shouldDelete) {
+          rowsRemoved.notificationAlerts += 1;
+        } else {
+          activeNotifications.push(notification);
+        }
+      }
+
+      store.auditLogs = [];
+      store.adminActionLogs = [];
+      store.loginHistory = [];
+      store.activitySessions = [];
+      store.notificationAlerts = activeNotifications;
+      await writeJsonStore(store);
+    });
+  }
+
+  const after = await getStorageSummary();
+  const totalRowsRemoved = Object.values(rowsRemoved).reduce((sum, count) => sum + Number(count || 0), 0);
+  const totalSavedBytes = Math.max(0, before.totalBytes - after.totalBytes);
+
+  return {
+    ok: true,
+    confirmation: "This deletes logs only. Messages, users, memories and media stay safe.",
+    rowsRemoved,
+    totalRowsRemoved,
+    storageBefore: before,
+    storageAfter: after,
+    totalSavedBytes,
+    totalSaved: formatBytes(totalSavedBytes)
+  };
 }
 
 async function markStaleUsersOffline() {
@@ -2648,6 +2972,7 @@ async function updateUserSecurityStatus(username, updates = {}) {
           suspended_until AS "suspendedUntil",
           blocked_at AS "blockedAt",
           blocked_reason AS "blockedReason",
+          search_hidden AS "searchHidden",
           created_at AS "createdAt"
       `,
       [normalizedUsername, accountStatus, isShadowBanned, suspendedUntilIso, blockedReason]
@@ -2664,6 +2989,64 @@ async function updateUserSecurityStatus(username, updates = {}) {
     user.suspendedUntil = suspendedUntilIso;
     user.blockedReason = blockedReason;
     user.blockedAt = accountStatus === "active" ? null : user.blockedAt || new Date().toISOString();
+    await writeJsonStore(store);
+    return normalizeUser(user);
+  });
+}
+
+async function updateUserSearchVisibility(username, searchHidden) {
+  const normalizedUsername = normalizeUsername(username);
+
+  if (!normalizedUsername) {
+    return null;
+  }
+
+  if (usePostgres) {
+    await initStore();
+    const result = await pool.query(
+      `
+        UPDATE inbox_users
+        SET search_hidden = $2
+        WHERE username = $1
+        RETURNING
+          username,
+          display_name AS "displayName",
+          role,
+          bio,
+          profile_image_url AS "profileImageUrl",
+          profile_image_mime AS "profileImageMime",
+          profile_image_name AS "profileImageName",
+          (profile_image_mime <> '' OR profile_image_url <> '') AS "hasProfileImage",
+          anonymous_mode AS "anonymousMode",
+          is_online AS "isOnline",
+          last_seen AS "lastSeen",
+          login_time AS "loginTime",
+          logout_time AS "logoutTime",
+          current_session_id AS "currentSessionId",
+          session_duration_seconds AS "sessionDurationSeconds",
+          account_status AS "accountStatus",
+          is_shadow_banned AS "isShadowBanned",
+          suspended_until AS "suspendedUntil",
+          blocked_at AS "blockedAt",
+          blocked_reason AS "blockedReason",
+          search_hidden AS "searchHidden",
+          created_at AS "createdAt"
+      `,
+      [normalizedUsername, Boolean(searchHidden)]
+    );
+
+    return result.rows[0] ? normalizeUser(result.rows[0]) : null;
+  }
+
+  return queuedWrite(async () => {
+    const store = await readJsonStore();
+    const user = store.users.find((item) => item.username === normalizedUsername);
+
+    if (!user) {
+      return null;
+    }
+
+    user.searchHidden = Boolean(searchHidden);
     await writeJsonStore(store);
     return normalizeUser(user);
   });
@@ -2773,6 +3156,7 @@ async function getUltimateAdminMonitoring(options = {}) {
             suspended_until AS "suspendedUntil",
             blocked_at AS "blockedAt",
             blocked_reason AS "blockedReason",
+            search_hidden AS "searchHidden",
             created_at AS "createdAt"
           FROM inbox_users
           ORDER BY is_online DESC, last_seen DESC NULLS LAST, display_name ASC
@@ -3047,7 +3431,7 @@ async function findNotificationAlert(id) {
 async function listNotificationsForUser(username, options = {}) {
   const recipientUsername = normalizeUsername(username);
   const includeSeen = Boolean(options.includeSeen);
-  const limit = clampLimit(options.limit, 40, 100);
+  const limit = clampLimit(options.limit, 30, 80);
 
   if (!recipientUsername) {
     return [];
@@ -3146,7 +3530,7 @@ async function markNotificationsRead(username, ids = []) {
 }
 
 async function listNotificationHistory(options = {}) {
-  const limit = clampLimit(options.limit, 80, 200);
+  const limit = clampLimit(options.limit, 50, 100);
 
   if (usePostgres) {
     await initStore();
@@ -3305,12 +3689,22 @@ async function updateUserOnlineStatus(username, isOnline) {
 
   return result.rowCount > 0;
 }
+
+async function closeStore() {
+  if (pool) {
+    await pool.end();
+  }
+}
+
 module.exports = {
   addMessage,
   authenticateUser,
+  cleanupExpiredNotifications,
   countActiveNotifications,
+  cleanupStorageLogs,
   cleanupExpiredMessages,
   cleanupAnalyticsLogs,
+  closeStore,
   createNotificationAlert,
   deleteMessage,
   deleteNotificationAlert,
@@ -3319,9 +3713,11 @@ module.exports = {
   findNotificationAlert,
   findUser,
   findAccessibleMessage,
+  getStorageSummary,
   getUserAvatar,
   getUltimateAdminMonitoring,
   initStore,
+  isRestrictedSearchTerm,
   listNotificationHistory,
   listChatSummaries,
   listConversationMessages,
@@ -3348,5 +3744,7 @@ module.exports = {
   updateUserPassword,
   updateUserProfile,
   updateUserOnlineStatus,
+  updateUserSearchVisibility,
+  userHasConversation,
   updateUserSettings
 };

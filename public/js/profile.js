@@ -51,7 +51,9 @@ function applyUser(user) {
   displayName.value = user.displayName || user.username;
   bioInput.value = user.bio || "";
   emailInput.value = user.email || "";
-  anonymousMode.checked = Boolean(user.anonymousMode);
+  if (anonymousMode) {
+    anonymousMode.checked = Boolean(user.anonymousMode);
+  }
   profileTheme.value = user.theme || "vintage-dark";
   profileFont.value = user.fontStyle || "serif";
   profileWallpaper.value = user.wallpaper || "paper";
@@ -84,7 +86,7 @@ profileForm.addEventListener("submit", async (event) => {
       displayName: displayName.value,
       bio: bioInput.value,
       email: emailInput.value,
-      anonymousMode: anonymousMode.checked,
+      anonymousMode: anonymousMode ? anonymousMode.checked : Boolean(currentUser && currentUser.anonymousMode),
       theme: profileTheme.value,
       wallpaper: profileWallpaper.value,
       fontStyle: profileFont.value,

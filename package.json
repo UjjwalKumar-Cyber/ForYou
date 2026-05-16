@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "hash-password": "node scripts/hash-password.js"
+    "hash-password": "node scripts/hash-password.js",
+    "maintenance:summary": "node scripts/maintenance.js summary",
+    "maintenance:cleanup": "node scripts/maintenance.js cleanup"
   },
   "engines": {
     "node": ">=18.18.0"

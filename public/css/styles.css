@@ -450,7 +450,13 @@ textarea:focus-visible {
 
 .monitor-toolbar {
   display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   justify-content: flex-end;
+}
+
+.cleanup-warning {
+  margin-top: 8px;
 }
 
 .monitor-user-list,
@@ -1335,6 +1341,61 @@ h1 {
   min-width: 0;
 }
 
+.user-search-result {
+  margin-top: 8px;
+}
+
+.user-search-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(244, 199, 119, 0.2);
+  border-radius: 16px;
+  background: rgba(244, 199, 119, 0.08);
+  padding: 10px;
+}
+
+.user-search-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.user-search-copy strong,
+.user-search-copy p {
+  overflow-wrap: anywhere;
+}
+
+.user-search-copy small {
+  color: var(--dim);
+  font-size: 0.76rem;
+}
+
+.user-search-copy p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.user-search-card button {
+  min-height: 34px;
+  border: 1px solid rgba(255, 111, 159, 0.28);
+  border-radius: 999px;
+  background: rgba(255, 111, 159, 0.12);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.76rem;
+  font-weight: 780;
+  padding: 0 11px;
+  transition: background var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard);
+}
+
+.user-search-card button:hover {
+  background: rgba(255, 111, 159, 0.18);
+  transform: translateY(-1px);
+}
+
 .chat-list {
   display: grid;
   align-content: start;
@@ -1596,6 +1657,30 @@ h1 {
   padding: 13px 14px 11px;
   contain: layout paint style;
   transition: border-color var(--motion-medium) var(--ease-standard), box-shadow var(--motion-medium) var(--ease-standard), transform var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard);
+}
+
+.load-older-button {
+  align-self: center;
+  min-height: 36px;
+  border: 1px solid rgba(244, 199, 119, 0.22);
+  border-radius: 999px;
+  background: rgba(244, 199, 119, 0.08);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 800;
+  padding: 0 14px;
+  transition: background var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard), opacity var(--motion-fast) var(--ease-standard);
+}
+
+.load-older-button:hover:not(:disabled) {
+  background: rgba(244, 199, 119, 0.14);
+  transform: translateY(-1px);
+}
+
+.load-older-button:disabled {
+  cursor: wait;
+  opacity: 0.62;
 }
 
 .message-bubble.is-mine {
@@ -2080,8 +2165,13 @@ h1 {
     font-size: 1.45rem;
   }
 
-  .active-strip {
-    min-height: 44px;
+  .user-search-card {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .user-search-card button {
+    grid-column: 1 / -1;
+    width: 100%;
   }
 
   .chat-item {

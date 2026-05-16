@@ -4,13 +4,10 @@ const loginMessage = document.querySelector("#admin-login-message");
 const messagesPanel = document.querySelector("#messages-panel");
 const statusMessage = document.querySelector("#admin-status");
 const chatList = document.querySelector("#chat-list");
-const activeFriends = document.querySelector("#active-friends");
 const messageList = document.querySelector("#message-list");
 const refreshButton = document.querySelector("#refresh-button");
 const logoutButton = document.querySelector("#logout-button");
 const inboxUser = document.querySelector("#inbox-user");
-const activeStatus = document.querySelector("#active-status");
-const accountPresenceDot = document.querySelector("#account-presence-dot");
 const chatTemplate = document.querySelector("#chat-template");
 const messageTemplate = document.querySelector("#message-template");
 const accountMessageForm = document.querySelector("#account-message-form");
@@ -36,8 +33,6 @@ const menuButton = document.querySelector("#account-menu-button");
 const closeMenuButton = document.querySelector("#account-menu-close");
 const accountDrawer = document.querySelector("#account-drawer");
 const drawerBackdrop = document.querySelector("#drawer-backdrop");
-const anonymousModeToggle = document.querySelector("#anonymous-mode-toggle");
-const privacyStatus = document.querySelector("#privacy-status");
 const letterAlerts = document.querySelector("#letter-alerts");
 const peerAvatar = document.querySelector("#peer-avatar");
 const peerName = document.querySelector("#peer-name");
@@ -59,6 +54,8 @@ const monitorUserList = document.querySelector("#monitor-user-list");
 const monitorEventList = document.querySelector("#monitor-event-list");
 const monitorStatus = document.querySelector("#monitor-status");
 const monitorRefreshButton = document.querySelector("#monitor-refresh-button");
+const cleanupStorageButton = document.querySelector("#cleanup-storage-button");
+const cleanupStorageStatus = document.querySelector("#cleanup-storage-status");
 const notificationStack = document.querySelector("#notification-stack");
 const notificationForm = document.querySelector("#notification-form");
 const notificationRecipient = document.querySelector("#notification-recipient");
@@ -68,11 +65,14 @@ const notificationType = document.querySelector("#notification-type");
 const notificationAdminStatus = document.querySelector("#notification-admin-status");
 const notificationHistoryList = document.querySelector("#notification-history-list");
 const notificationActiveCount = document.querySelector("#notification-active-count");
+const userSearchResult = document.querySelector("#user-search-result");
+const userSearchStatus = document.querySelector("#user-search-status");
 
 const ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
 const REFRESH_MS = 120000;
 const HEARTBEAT_MS = 45000;
 const TYPING_IDLE_MS = 1200;
+const MESSAGE_PAGE_SIZE = 50;
 
 let currentUser = null;
 let conversations = [];
@@ -84,11 +84,14 @@ let refreshTimer = null;
 let socket = null;
 let typingTimer = null;
 let messageSearchTimer = null;
+let userSearchTimer = null;
 let heartbeatTimer = null;
 let monitoringDebounceTimer = null;
 let pendingAudioBlob = null;
 let mediaRecorder = null;
 let recordingChunks = [];
+let hasOlderMessages = false;
+let loadingOlderMessages = false;
 const displayedNotificationIds = new Set();
 
 function setStatus(text, type = "neutral") {
@@ -107,6 +110,7 @@ function setComposerStatus(text, type = "neutral") {
 }
 
 function setInlineStatus(element, text, type = "neutral") {
+  if (!element) return;
   element.textContent = text;
   element.dataset.type = type;
 }
@@ -261,9 +265,6 @@ function updateAccountHeader() {
   }
 
   inboxUser.textContent = currentUser.displayName || currentUser.username;
-  anonymousModeToggle.checked = Boolean(currentUser.anonymousMode);
-  activeStatus.textContent = currentUser.anonymousMode ? "Anonymous Mode on" : "Active now";
-  accountPresenceDot.classList.toggle("is-active", !currentUser.anonymousMode);
   ultimateAdminPanel?.classList.toggle("is-hidden", !isUltimateAdminUser(currentUser));
   document.body.dataset.theme = currentUser.theme || "vintage-dark";
   document.body.dataset.font = currentUser.fontStyle || "serif";
@@ -326,7 +327,7 @@ function openPeerProfile() {
   peerProfileName.textContent = name;
   peerProfileUsername.textContent = `@${peer.username}`;
   peerProfileBio.textContent = peer.bio || "No bio yet.";
-  peerProfileStatus.textContent = peer.isActive ? "Active now" : "";
+  peerProfileStatus.textContent = isUltimateAdminUser(currentUser) && peer.isActive ? "Active now" : "";
   peerProfileAvatar.textContent = userInitial(name);
   applyAvatar(peerProfileAvatar, peer, name);
 
@@ -368,32 +369,7 @@ function chatPreview(conversation, peer) {
 }
 
 function renderActiveFriends() {
-  const visible = activeUsers.filter((user) => user.username !== currentUser.username).slice(0, 8);
-
-  if (!visible.length) {
-    const hint = document.createElement("span");
-    hint.className = "file-hint";
-    hint.textContent = "No active friends right now.";
-    activeFriends.replaceChildren(hint);
-    return;
-  }
-
-  activeFriends.replaceChildren(
-    ...visible.map((user) => {
-      const item = document.createElement("button");
-      const avatar = document.createElement("span");
-      const name = document.createElement("span");
-      item.className = "active-friend";
-      item.type = "button";
-      item.dataset.username = user.username;
-      avatar.className = "sender-avatar";
-      applyAvatar(avatar, user, user.displayName);
-      name.textContent = user.displayName || user.username;
-      item.append(avatar, name);
-      item.addEventListener("click", () => selectConversation(user.username));
-      return item;
-    })
-  );
+  return;
 }
 
 function makeMonitorStat(label, value) {
@@ -436,6 +412,7 @@ function renderMonitoring(data) {
         const blockButton = document.createElement("button");
         const suspendButton = document.createElement("button");
         const activateButton = document.createElement("button");
+        const searchButton = document.createElement("button");
         const session = user.session || {};
         const isRestricted = user.accountStatus === "blocked" || user.accountStatus === "suspended";
         const location = [session.city, session.country].filter(Boolean).join(", ") || "location unavailable";
@@ -467,9 +444,14 @@ function renderMonitoring(data) {
         activateButton.disabled = !isRestricted;
         activateButton.addEventListener("click", () => updateSecurityStatus(user.username, "active"));
 
+        searchButton.type = "button";
+        searchButton.textContent = user.searchHidden ? "Allow search" : "Hide from search";
+        searchButton.disabled = user.username === currentUser.username;
+        searchButton.addEventListener("click", () => updateSearchVisibility(user.username, !user.searchHidden));
+
         copy.append(name, meta);
         top.append(avatar, copy);
-        actions.append(blockButton, suspendButton, activateButton);
+        actions.append(blockButton, suspendButton, activateButton, searchButton);
         item.append(top, details, actions);
         return item;
       })
@@ -663,9 +645,108 @@ function ensureConversationForRecipients() {
   conversations = [...conversations, ...additions];
 }
 
+function clearUserSearch() {
+  userSearchResult?.classList.add("is-hidden");
+  userSearchResult?.replaceChildren();
+  if (userSearchStatus) {
+    setInlineStatus(userSearchStatus, "", "neutral");
+  }
+}
+
+function addSearchUserToChats(user) {
+  if (!user || !user.username) {
+    return;
+  }
+
+  if (!recipients.some((recipient) => recipient.username === user.username)) {
+    recipients.push(user);
+  }
+
+  if (!conversations.some((conversation) => conversation.peerUsername === user.username)) {
+    conversations.unshift({
+      peerUsername: user.username,
+      peer: user,
+      lastMessage: null,
+      unreadCount: 0
+    });
+  }
+}
+
+function renderUserSearchResult(user) {
+  if (!userSearchResult) {
+    return;
+  }
+
+  const card = document.createElement("article");
+  const avatar = document.createElement("span");
+  const copy = document.createElement("span");
+  const name = document.createElement("strong");
+  const meta = document.createElement("small");
+  const bio = document.createElement("p");
+  const button = document.createElement("button");
+
+  card.className = "user-search-card";
+  avatar.className = "sender-avatar";
+  copy.className = "user-search-copy";
+  name.textContent = user.displayName || user.username;
+  meta.textContent = `@${user.username}`;
+  bio.textContent = user.bio || "No bio yet.";
+  button.type = "button";
+  button.textContent = "Start Chat";
+  button.addEventListener("click", async () => {
+    addSearchUserToChats(user);
+    clearUserSearch();
+    if (chatSearch) chatSearch.value = "";
+    renderChatList();
+    await selectConversation(user.username);
+  });
+
+  applyAvatar(avatar, user, user.displayName || user.username);
+  copy.append(name, meta, bio);
+  card.append(avatar, copy, button);
+  userSearchResult.replaceChildren(card);
+  userSearchResult.classList.remove("is-hidden");
+}
+
+async function searchExactUsername() {
+  const username = chatSearch.value.trim();
+
+  if (!username) {
+    clearUserSearch();
+    setInlineStatus(userSearchStatus, "Enter exact username", "neutral");
+    return;
+  }
+
+  setInlineStatus(userSearchStatus, "Searching...", "neutral");
+
+  try {
+    const response = await fetch(`/api/users/search?username=${encodeURIComponent(username)}`, {
+      cache: "no-store"
+    });
+    const result = await response.json();
+
+    if (!response.ok) {
+      clearUserSearch();
+      setInlineStatus(userSearchStatus, result.error || "User not found", "error");
+      return;
+    }
+
+    if (!result.ok) {
+      clearUserSearch();
+      setInlineStatus(userSearchStatus, result.error || "User not found", "error");
+      return;
+    }
+
+    renderUserSearchResult(result.user);
+    setInlineStatus(userSearchStatus, "Found.", "success");
+  } catch {
+    clearUserSearch();
+    setInlineStatus(userSearchStatus, "Network error while searching.", "error");
+  }
+}
+
 function renderChatList() {
   ensureConversationForRecipients();
-  const query = chatSearch.value.trim().toLowerCase();
   const ordered = [...conversations]
     .sort((a, b) => {
       if (a.unreadCount !== b.unreadCount) {
@@ -676,10 +757,6 @@ function renderChatList() {
         new Date(b.lastMessage && b.lastMessage.createdAt ? b.lastMessage.createdAt : 0) -
         new Date(a.lastMessage && a.lastMessage.createdAt ? a.lastMessage.createdAt : 0)
       );
-    })
-    .filter((conversation) => {
-      const peer = conversationDisplay(conversation);
-      return !query || `${peer.displayName} ${chatPreview(conversation, peer)}`.toLowerCase().includes(query);
     });
 
   if (!ordered.length) {
@@ -704,7 +781,7 @@ function renderChatList() {
     title.textContent = peer.displayName || peer.username;
     preview.textContent = chatPreview(conversation, peer);
     time.textContent = formatChatTime(conversation.lastMessage && conversation.lastMessage.createdAt);
-    dot.classList.toggle("is-active", Boolean(peer.isActive));
+    dot.classList.toggle("is-active", Boolean(isUltimateAdminUser(currentUser) && peer.isActive));
 
     if (conversation.unreadCount > 0) {
       unread.textContent = String(conversation.unreadCount);
@@ -751,7 +828,7 @@ function updatePeerHeader() {
     return;
   }
 
-  peerStatus.textContent = peer && peer.isActive ? "Active now" : "";
+  peerStatus.textContent = isUltimateAdminUser(currentUser) && peer && peer.isActive ? "Active now" : "";
   starredButton.disabled = false;
   viewProfileButton.disabled = false;
   messageSearch.disabled = false;
@@ -830,7 +907,17 @@ function renderReactions(message, row) {
   }
 }
 
-function renderMessages(messages) {
+function makeLoadOlderButton() {
+  const button = document.createElement("button");
+  button.className = "load-older-button";
+  button.type = "button";
+  button.textContent = loadingOlderMessages ? "Loading..." : "Load older letters";
+  button.disabled = loadingOlderMessages;
+  button.addEventListener("click", loadOlderMessages);
+  return button;
+}
+
+function renderMessages(messages, options = {}) {
   currentMessages = messages;
 
   if (!messages.length) {
@@ -839,6 +926,10 @@ function renderMessages(messages) {
   }
 
   const fragment = document.createDocumentFragment();
+
+  if (hasOlderMessages) {
+    fragment.append(makeLoadOlderButton());
+  }
 
   for (const message of messages) {
     const node = messageTemplate.content.firstElementChild.cloneNode(true);
@@ -884,7 +975,9 @@ function renderMessages(messages) {
   }
 
   messageList.replaceChildren(fragment);
-  scrollMessagesToBottom();
+  if (!options.preserveScroll) {
+    scrollMessagesToBottom();
+  }
 }
 
 async function loadSession() {
@@ -962,6 +1055,12 @@ async function loadChats() {
 }
 
 async function loadActiveFriends() {
+  if (!isUltimateAdminUser(currentUser)) {
+    activeUsers = [];
+    renderActiveFriends();
+    return;
+  }
+
   const response = await fetch("/api/active-friends", { cache: "no-store" });
   const result = await response.json();
 
@@ -1056,6 +1155,74 @@ async function updateSecurityStatus(username, accountStatus) {
     await loadAll();
   } catch {
     setMonitorStatus("Network error while saving account.", "error");
+  }
+}
+
+async function updateSearchVisibility(username, searchHidden) {
+  if (!isUltimateAdminUser(currentUser)) {
+    return;
+  }
+
+  setMonitorStatus(searchHidden ? "Hiding user from search..." : "Allowing user search...", "neutral");
+
+  try {
+    const response = await fetch(`/api/admin/users/${encodeURIComponent(username)}/search-visibility`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ searchHidden })
+    });
+    const result = await response.json();
+
+    if (!response.ok) {
+      setMonitorStatus(result.error || "Could not update search visibility.", "error");
+      return;
+    }
+
+    setMonitorStatus(searchHidden ? "User hidden from exact search." : "User allowed in exact search.", "success");
+    await loadAdminMonitoring();
+    await loadAll();
+  } catch {
+    setMonitorStatus("Network error while saving search visibility.", "error");
+  }
+}
+
+async function cleanStorage() {
+  if (!isUltimateAdminUser(currentUser) || !cleanupStorageButton) {
+    return;
+  }
+
+  const warning = "This deletes logs only. Messages, users, memories and media stay safe.";
+  if (!window.confirm(warning)) {
+    return;
+  }
+
+  cleanupStorageButton.disabled = true;
+  setInlineStatus(cleanupStorageStatus, "Cleaning logs...", "neutral");
+
+  try {
+    const response = await fetch("/api/admin/cleanup-storage", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm: true })
+    });
+    const result = await response.json();
+
+    if (!response.ok) {
+      setInlineStatus(cleanupStorageStatus, result.error || "Could not clean storage.", "error");
+      return;
+    }
+
+    setInlineStatus(
+      cleanupStorageStatus,
+      `Cleaned ${result.totalRowsRemoved || 0} log rows. Saved ${result.totalSaved || "0 B"}.`,
+      "success"
+    );
+    await loadAdminMonitoring();
+    await loadAdminNotifications();
+  } catch {
+    setInlineStatus(cleanupStorageStatus, "Network error while cleaning storage.", "error");
+  } finally {
+    cleanupStorageButton.disabled = false;
   }
 }
 
@@ -1162,7 +1329,11 @@ async function loadMessages(options = {}) {
   }
 
   const query = messageSearch.value.trim();
-  const response = await fetch(`/api/chats/${encodeURIComponent(currentPeer)}/messages?q=${encodeURIComponent(query)}`, {
+  const params = new URLSearchParams({
+    q: query,
+    limit: String(MESSAGE_PAGE_SIZE)
+  });
+  const response = await fetch(`/api/chats/${encodeURIComponent(currentPeer)}/messages?${params.toString()}`, {
     cache: "no-store"
   });
   const result = await response.json();
@@ -1173,10 +1344,56 @@ async function loadMessages(options = {}) {
   }
 
   updatePeerHeader();
+  hasOlderMessages = (result.messages || []).length >= MESSAGE_PAGE_SIZE;
   renderMessages(result.messages || []);
 
   if (!options.skipRead && currentPeer) {
     await markRead();
+  }
+}
+
+async function loadOlderMessages() {
+  if (!currentPeer || !currentMessages.length || loadingOlderMessages) {
+    return;
+  }
+
+  loadingOlderMessages = true;
+  renderMessages(currentMessages, { preserveScroll: true });
+
+  const previousHeight = messageList.scrollHeight;
+  const query = messageSearch.value.trim();
+  const before = currentMessages[0] && currentMessages[0].createdAt;
+  const params = new URLSearchParams({
+    q: query,
+    limit: String(MESSAGE_PAGE_SIZE),
+    before: before || ""
+  });
+
+  try {
+    const response = await fetch(`/api/chats/${encodeURIComponent(currentPeer)}/messages?${params.toString()}`, {
+      cache: "no-store"
+    });
+    const result = await response.json();
+
+    if (!response.ok) {
+      setStatus(result.error || "Could not load older messages.", "error");
+      return;
+    }
+
+    const olderMessages = result.messages || [];
+    const seen = new Set(currentMessages.map((message) => message.id));
+    hasOlderMessages = olderMessages.length >= MESSAGE_PAGE_SIZE;
+    renderMessages([...olderMessages.filter((message) => !seen.has(message.id)), ...currentMessages], {
+      preserveScroll: true
+    });
+    window.requestAnimationFrame(() => {
+      messageList.scrollTop = Math.max(0, messageList.scrollHeight - previousHeight);
+    });
+  } catch {
+    setStatus("Network error while loading older messages.", "error");
+  } finally {
+    loadingOlderMessages = false;
+    renderMessages(currentMessages, { preserveScroll: true });
   }
 }
 
@@ -1477,35 +1694,6 @@ async function deleteMessage(id) {
   renderChatList();
 }
 
-async function toggleAnonymousMode() {
-  anonymousModeToggle.disabled = true;
-  setInlineStatus(privacyStatus, "Saving...", "neutral");
-
-  try {
-    const response = await fetch("/api/settings/anonymous-mode", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ anonymousMode: anonymousModeToggle.checked })
-    });
-    const result = await response.json();
-
-    if (!response.ok) {
-      anonymousModeToggle.checked = !anonymousModeToggle.checked;
-      setInlineStatus(privacyStatus, result.error || "Could not save.", "error");
-      return;
-    }
-
-    currentUser = result.user;
-    updateAccountHeader();
-    setInlineStatus(privacyStatus, "Saved.", "success");
-  } catch {
-    anonymousModeToggle.checked = !anonymousModeToggle.checked;
-    setInlineStatus(privacyStatus, "Network error.", "error");
-  } finally {
-    anonymousModeToggle.disabled = false;
-  }
-}
-
 async function toggleRecording() {
   if (mediaRecorder && mediaRecorder.state === "recording") {
     mediaRecorder.stop();
@@ -1627,6 +1815,7 @@ loginForm.addEventListener("submit", async (event) => {
 
 refreshButton.addEventListener("click", loadAll);
 monitorRefreshButton?.addEventListener("click", loadAdminMonitoring);
+cleanupStorageButton?.addEventListener("click", cleanStorage);
 notificationForm?.addEventListener("submit", sendAdminNotification);
 backChatButton.addEventListener("click", closeConversation);
 viewProfileButton.addEventListener("click", openPeerProfile);
@@ -1635,14 +1824,16 @@ peerProfileBackdrop.addEventListener("click", closePeerProfile);
 menuButton.addEventListener("click", openDrawer);
 closeMenuButton.addEventListener("click", closeDrawer);
 drawerBackdrop.addEventListener("click", closeDrawer);
-anonymousModeToggle.addEventListener("change", toggleAnonymousMode);
 accountMessage.addEventListener("input", () => {
   updateCounter();
   resizeChatTextarea();
   emitTyping();
 });
 accountMessageForm.addEventListener("submit", sendMessage);
-chatSearch.addEventListener("input", renderChatList);
+chatSearch.addEventListener("input", () => {
+  window.clearTimeout(userSearchTimer);
+  userSearchTimer = window.setTimeout(searchExactUsername, 320);
+});
 messageSearch.addEventListener("input", () => {
   window.clearTimeout(messageSearchTimer);
   messageSearchTimer = window.setTimeout(() => loadMessages({ skipRead: true }), 250);

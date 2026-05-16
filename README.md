@@ -54,10 +54,10 @@ foryou/
 - Typing indicator, read receipts, replies, emoji reactions, and search
 - Voice notes, images, videos, PDFs, and text file sharing
 - Message highlights for new incoming messages
-- Active friends strip with online indicators
 - Simple inbox-first chat layout with full history after tapping a sender
-- Sender profile view with photo, username, active status, and bio
-- Anonymous Mode to hide active status, typing, and read receipts
+- Sender profile view with photo, username, and bio
+- Privacy-first chat access: regular users do not see online status, active friends, or last seen
+- Exact username search for starting new chats, with admin-controlled hidden users
 - Starred messages that stay saved
 - Delete option inside each message history
 - Normal messages auto-expire after 24 hours unless starred
@@ -66,7 +66,7 @@ foryou/
 - PWA manifest and service worker for app-like loading of static assets
 - Long-lived sessions with manual logout
 - Transparent ultimate-admin monitoring for online status, last seen, login history, suspicious login attempts, device/browser summaries, and approximate IP-based city/country
-- Admin account block/suspend controls with admin action logs
+- Admin account block/suspend controls, search visibility controls, popup alerts, and one-click log cleanup
 - Optional Cloudinary media storage so profile pictures and uploads are stored as URLs instead of large database blobs
 - `helmet` security headers and `express-rate-limit`
 - Server-side sanitization with `sanitize-html`
@@ -114,6 +114,15 @@ The app stores password hashes, not readable passwords. To manually create a has
 npm run hash-password -- your-password
 ```
 
+Maintenance helpers for the 1GB storage limit:
+
+```bash
+npm run maintenance:summary
+npm run maintenance:cleanup
+```
+
+Cleanup removes logs and expired/seen popup history only. It does not delete users, messages, media, reactions, starred messages, memories, or chat history.
+
 ## Run Locally
 
 ```bash
@@ -141,6 +150,7 @@ POST   /api/logout
 POST   /api/message
 GET    /api/session
 GET    /api/recipients
+GET    /api/users/search?username=USERNAME
 GET    /api/chats
 GET    /api/chats/:peer/messages
 POST   /api/chats/:peer/read
@@ -151,8 +161,11 @@ POST   /api/messages/:id/reactions
 DELETE /api/messages/:id
 POST   /api/ping
 GET    /api/admin/monitoring
+GET    /api/admin/storage-summary
+POST   /api/admin/cleanup-storage
 GET    /api/admin/users/:username/logins
 PATCH  /api/admin/users/:username/security
+PATCH  /api/admin/users/:username/search-visibility
 GET    /api/profile
 PATCH  /api/profile
 POST   /api/profile/avatar
@@ -161,6 +174,8 @@ PATCH  /api/account/password
 PATCH  /api/settings/anonymous-mode
 GET    /api/active-friends
 ```
+
+`GET /api/users/search?username=USERNAME` only accepts exact, case-insensitive usernames. Normal users cannot search hidden users, admin users, restricted search terms, blocked users, or themselves. `ultimate_admin` can search and manage all users.
 
 `POST /api/message` accepts `multipart/form-data`:
 
