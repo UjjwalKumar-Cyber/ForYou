@@ -5,9 +5,6 @@ const textarea = document.querySelector("#message");
 const galleryImageInput = document.querySelector("#message-gallery-image");
 const cameraImageInput = document.querySelector("#message-camera-image");
 const clearImageButton = document.querySelector("#clear-message-image");
-const deliverAtInput = document.querySelector("#deliver-at");
-const memoryDateInput = document.querySelector("#memory-date");
-const memoryTypeInput = document.querySelector("#memory-type");
 const imageName = document.querySelector("#message-image-name");
 const counter = document.querySelector("#character-count");
 const statusMessage = document.querySelector("#message-status");
@@ -159,8 +156,6 @@ form.addEventListener("submit", async (event) => {
   const senderName = senderNameInput.value.trim();
   const recipientUsername = recipientSelect.value;
   const message = textarea.value.trim();
-  const deliverAt = deliverAtInput ? deliverAtInput.value : "";
-  const memoryDate = memoryDateInput ? memoryDateInput.value : "";
   const imageFile = selectedImageFile();
   const imageError = selectedImageError(imageFile);
 
@@ -198,10 +193,6 @@ form.addEventListener("submit", async (event) => {
   payload.append("senderName", senderName);
   payload.append("recipientUsername", recipientUsername);
   payload.append("message", message);
-  payload.append("deliverAt", deliverAt);
-  payload.append("memoryDate", memoryDate);
-  payload.append("memoryType", deliverAt ? "time_capsule" : memoryDate ? "memory" : (memoryTypeInput ? memoryTypeInput.value : "letter"));
-  payload.append("isTimeCapsule", deliverAt ? "true" : "false");
 
   if (imageFile) {
     payload.append("attachment", imageFile);
@@ -226,8 +217,6 @@ form.addEventListener("submit", async (event) => {
     textarea.value = "";
     galleryImageInput.value = "";
     cameraImageInput.value = "";
-    if (deliverAtInput) deliverAtInput.value = "";
-    if (memoryDateInput) memoryDateInput.value = "";
     updateCounter();
     updateImageName();
     setStatus(result.message || "Sent.", "success");

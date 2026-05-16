@@ -195,7 +195,6 @@ function normalizeMessage(message) {
   const reactions = parseJsonField(message.reactions, {});
   const starredBy = parseJsonField(message.starredBy || message.starred_by, []);
   const attachment = normalizeAttachment(message);
-  const memoryType = String(message.memoryType || message.memory_type || "letter").trim() || "letter";
 
   return {
     id: message.id,
@@ -211,11 +210,6 @@ function normalizeMessage(message) {
     reactions: reactions && typeof reactions === "object" ? reactions : {},
     starredBy: Array.isArray(starredBy) ? starredBy.map(normalizeUsername).filter(Boolean) : [],
     expiresAt: message.expiresAt || message.expires_at || null,
-    deliverAt: message.deliverAt || message.deliver_at || null,
-    openedAt: message.openedAt || message.opened_at || null,
-    memoryDate: message.memoryDate || message.memory_date || null,
-    memoryType: memoryType.slice(0, 40),
-    isTimeCapsule: Boolean(message.isTimeCapsule || message.is_time_capsule),
     readAt: message.readAt || message.read_at || null,
     createdAt: message.createdAt || message.created_at || new Date().toISOString(),
     image: normalizeImage(message)
@@ -478,15 +472,6 @@ async function setupPostgresStore() {
   `);
 
   await pool.query(`
-    ALTER TABLE messages
-    ADD COLUMN IF NOT EXISTS memory_type TEXT NOT NULL DEFAULT 'letter',
-    ADD COLUMN IF NOT EXISTS deliver_at TIMESTAMPTZ,
-    ADD COLUMN IF NOT EXISTS opened_at TIMESTAMPTZ,
-    ADD COLUMN IF NOT EXISTS memory_date DATE,
-    ADD COLUMN IF NOT EXISTS is_time_capsule BOOLEAN NOT NULL DEFAULT false
-  `);
-
-  await pool.query(`
     CREATE TABLE IF NOT EXISTS user_activity_sessions (
       id UUID PRIMARY KEY,
       username TEXT NOT NULL,
@@ -690,12 +675,9 @@ async function setupPostgresStore() {
   await pool.query("CREATE INDEX IF NOT EXISTS idx_inbox_users_is_online ON inbox_users (is_online)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_inbox_users_last_seen ON inbox_users (last_seen DESC)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_inbox_users_account_status ON inbox_users (account_status)");
-  await pool.query("CREATE INDEX IF NOT EXISTS idx_inbox_users_role ON inbox_users (role)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_messages_sender_username ON messages (sender_username)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_messages_recipient_username ON messages (recipient_username)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages (created_at DESC)");
-  await pool.query("CREATE INDEX IF NOT EXISTS idx_messages_deliver_at ON messages (deliver_at)");
-  await pool.query("CREATE INDEX IF NOT EXISTS idx_messages_memory_date ON messages (memory_date)");
   await pool.query(
     "CREATE INDEX IF NOT EXISTS idx_messages_sender_recipient_created_at ON messages (sender_username, recipient_username, created_at DESC)"
   );
@@ -717,14 +699,10 @@ async function setupPostgresStore() {
   await pool.query(
     "CREATE INDEX IF NOT EXISTS idx_notification_alerts_recipient_seen_created ON notification_alerts (LOWER(recipient_username), seen, created_at DESC)"
   );
-  await pool.query(
-    "CREATE INDEX IF NOT EXISTS idx_notification_alerts_unread_recipient ON notification_alerts (LOWER(recipient_username), created_at DESC) WHERE seen = false"
-  );
   await pool.query("CREATE INDEX IF NOT EXISTS idx_notification_alerts_created ON notification_alerts (created_at DESC)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_notification_alerts_expires ON notification_alerts (expires_at)");
 
   await cleanupAnalyticsLogs();
-  await cleanupExpiredNotifications();
 
   await seedUsers();
 
@@ -776,10 +754,6 @@ async function initStore() {
   }
 
   return initPromise;
-}
-
-function getPostgresPool() {
-  return pool || null;
 }
 
 async function readJsonStore(ensureInitialized = true) {
@@ -1424,15 +1398,6 @@ function filterMessagesBySearch(messages, query) {
   );
 }
 
-function isMessageDelivered(message) {
-  if (!message || !message.deliverAt) {
-    return true;
-  }
-
-  const deliverAt = new Date(message.deliverAt).getTime();
-  return Number.isNaN(deliverAt) || deliverAt <= Date.now();
-}
-
 async function listConversationMessages(username, peerUsername, query = "") {
   const owner = normalizeUsername(username);
   const peer = normalizeUsername(peerUsername);
@@ -1478,11 +1443,6 @@ async function listConversationMessages(username, peerUsername, query = "") {
           reactions,
           starred_by AS "starredBy",
           expires_at AS "expiresAt",
-          deliver_at AS "deliverAt",
-          opened_at AS "openedAt",
-          memory_date AS "memoryDate",
-          memory_type AS "memoryType",
-          is_time_capsule AS "isTimeCapsule",
           read_at AS "readAt",
           image_data AS "imageData",
           image_url AS "imageUrl",
@@ -1495,7 +1455,6 @@ async function listConversationMessages(username, peerUsername, query = "") {
           (sender_username = $1 AND recipient_username = $2)
           OR (sender_username = $2 AND recipient_username = $1)
         )
-        AND (deliver_at IS NULL OR deliver_at <= NOW())
         ${searchSql}
         ${beforeSql}
         ORDER BY created_at DESC
@@ -1513,7 +1472,7 @@ async function listConversationMessages(username, peerUsername, query = "") {
       (message.senderUsername === owner && message.recipientUsername === peer) ||
       (message.senderUsername === peer && message.recipientUsername === owner);
     const matchesBefore = !before || Number.isNaN(before.getTime()) || new Date(message.createdAt) < before;
-    return matchesConversation && matchesBefore && isMessageDelivered(message);
+    return matchesConversation && matchesBefore;
   });
 
   return filterMessagesBySearch(messages, searchQuery)
@@ -1566,11 +1525,6 @@ async function listLetterMessages(username, query = "") {
           reactions,
           starred_by AS "starredBy",
           expires_at AS "expiresAt",
-          deliver_at AS "deliverAt",
-          opened_at AS "openedAt",
-          memory_date AS "memoryDate",
-          memory_type AS "memoryType",
-          is_time_capsule AS "isTimeCapsule",
           read_at AS "readAt",
           image_data AS "imageData",
           image_url AS "imageUrl",
@@ -1579,9 +1533,7 @@ async function listLetterMessages(username, query = "") {
           image_size AS "imageSize",
           created_at AS "createdAt"
         FROM messages
-        WHERE recipient_username = $1
-          AND COALESCE(sender_username, '') = ''
-          AND (deliver_at IS NULL OR deliver_at <= NOW())
+        WHERE recipient_username = $1 AND COALESCE(sender_username, '') = ''
         ${searchSql}
         ${beforeSql}
         ORDER BY created_at DESC
@@ -1596,7 +1548,7 @@ async function listLetterMessages(username, query = "") {
   const store = await readJsonStore();
   const messages = store.messages.filter((message) => {
     const matchesBefore = !before || Number.isNaN(before.getTime()) || new Date(message.createdAt) < before;
-    return message.recipientUsername === owner && !message.senderUsername && matchesBefore && isMessageDelivered(message);
+    return message.recipientUsername === owner && !message.senderUsername && matchesBefore;
   });
 
   return filterMessagesBySearch(messages, searchQuery)
@@ -1629,11 +1581,6 @@ async function listChatSummaries(username, options = {}) {
                 reactions,
                 starred_by,
                 expires_at,
-                deliver_at,
-                opened_at,
-                memory_date,
-                memory_type,
-                is_time_capsule,
                 read_at,
                 created_at,
                 CASE
@@ -1642,8 +1589,7 @@ async function listChatSummaries(username, options = {}) {
                   ELSE sender_username
                 END AS peer_username
               FROM messages
-              WHERE (sender_username = $1 OR recipient_username = $1)
-                AND (deliver_at IS NULL OR deliver_at <= NOW())
+              WHERE sender_username = $1 OR recipient_username = $1
             ),
             ranked_messages AS (
               SELECT
@@ -1660,11 +1606,6 @@ async function listChatSummaries(username, options = {}) {
                 reactions,
                 starred_by,
                 expires_at,
-                deliver_at,
-                opened_at,
-                memory_date,
-                memory_type,
-                is_time_capsule,
                 read_at,
                 created_at,
                 peer_username,
@@ -1687,11 +1628,6 @@ async function listChatSummaries(username, options = {}) {
               reactions,
               starred_by AS "starredBy",
               expires_at AS "expiresAt",
-              deliver_at AS "deliverAt",
-              opened_at AS "openedAt",
-              memory_date AS "memoryDate",
-              memory_type AS "memoryType",
-              is_time_capsule AS "isTimeCapsule",
               read_at AS "readAt",
               created_at AS "createdAt",
               peer_username AS "peerUsername",
@@ -1710,7 +1646,6 @@ async function listChatSummaries(username, options = {}) {
       }))
     : (await readJsonStore()).messages
         .filter((message) => message.senderUsername === owner || message.recipientUsername === owner)
-        .filter(isMessageDelivered)
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
   if (usePostgres) {
@@ -1776,11 +1711,6 @@ async function listMessagesForUser(username, options = {}) {
           reactions,
           starred_by AS "starredBy",
           expires_at AS "expiresAt",
-          deliver_at AS "deliverAt",
-          opened_at AS "openedAt",
-          memory_date AS "memoryDate",
-          memory_type AS "memoryType",
-          is_time_capsule AS "isTimeCapsule",
           read_at AS "readAt",
           image_data AS "imageData",
           image_url AS "imageUrl",
@@ -1790,7 +1720,6 @@ async function listMessagesForUser(username, options = {}) {
           created_at AS "createdAt"
         FROM messages
         WHERE recipient_username = $1
-          AND (deliver_at IS NULL OR deliver_at <= NOW())
         ORDER BY created_at DESC
         LIMIT $2
       `,
@@ -1805,7 +1734,6 @@ async function listMessagesForUser(username, options = {}) {
 
   return store.messages
     .filter((message) => message.recipientUsername === recipientUsername)
-    .filter(isMessageDelivered)
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
     .slice(0, limit);
 }
@@ -1819,10 +1747,6 @@ async function addMessage({
   attachment = null,
   kind = "text",
   replyToId = null,
-  memoryType = "letter",
-  deliverAt = null,
-  memoryDate = null,
-  isTimeCapsule = false,
   expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
 }) {
   const message = {
@@ -1837,11 +1761,6 @@ async function addMessage({
     reactions: {},
     starredBy: [],
     expiresAt,
-    deliverAt,
-    openedAt: null,
-    memoryDate,
-    memoryType: String(memoryType || "letter").slice(0, 40),
-    isTimeCapsule: Boolean(isTimeCapsule),
     readAt: null,
     createdAt: new Date().toISOString(),
     image
@@ -1867,11 +1786,6 @@ async function addMessage({
           reactions,
           starred_by,
           expires_at,
-          deliver_at,
-          opened_at,
-          memory_date,
-          memory_type,
-          is_time_capsule,
           read_at,
           image_data,
           image_url,
@@ -1885,8 +1799,7 @@ async function addMessage({
           $6, $7, $8, $9, $10,
           $11, $12, $13, $14, $15,
           $16, $17, $18, $19, $20,
-          $21, $22, $23, $24, $25,
-          $26, $27
+          $21, $22
         )
       `,
       [
@@ -1905,11 +1818,6 @@ async function addMessage({
         JSON.stringify(message.reactions),
         JSON.stringify(message.starredBy),
         message.expiresAt,
-        message.deliverAt,
-        message.openedAt,
-        message.memoryDate,
-        message.memoryType,
-        message.isTimeCapsule,
         message.readAt,
         message.image ? message.image.data : null,
         message.image ? message.image.url : null,
@@ -1955,17 +1863,10 @@ async function findAccessibleMessage(id, username) {
           reactions,
           starred_by AS "starredBy",
           expires_at AS "expiresAt",
-          deliver_at AS "deliverAt",
-          opened_at AS "openedAt",
-          memory_date AS "memoryDate",
-          memory_type AS "memoryType",
-          is_time_capsule AS "isTimeCapsule",
           read_at AS "readAt",
           created_at AS "createdAt"
         FROM messages
-        WHERE id = $1
-          AND (sender_username = $2 OR recipient_username = $2)
-          AND (deliver_at IS NULL OR deliver_at <= NOW())
+        WHERE id = $1 AND (sender_username = $2 OR recipient_username = $2)
       `,
       [id, owner]
     );
@@ -1975,7 +1876,7 @@ async function findAccessibleMessage(id, username) {
 
   const store = await readJsonStore();
   const message = store.messages.find(
-    (item) => item.id === id && (item.senderUsername === owner || item.recipientUsername === owner) && isMessageDelivered(item)
+    (item) => item.id === id && (item.senderUsername === owner || item.recipientUsername === owner)
   );
   return message ? normalizeMessage(message) : null;
 }
@@ -1995,7 +1896,6 @@ async function markConversationRead(username, peerUsername, includeLetters = fal
             WHERE recipient_username = $2
               AND COALESCE(sender_username, '') = ''
               AND read_at IS NULL
-              AND (deliver_at IS NULL OR deliver_at <= NOW())
             RETURNING id
           `
         : `
@@ -2004,7 +1904,6 @@ async function markConversationRead(username, peerUsername, includeLetters = fal
             WHERE recipient_username = $2
               AND sender_username = $3
               AND read_at IS NULL
-              AND (deliver_at IS NULL OR deliver_at <= NOW())
             RETURNING id
           `,
       includeLetters ? [readAt, owner] : [readAt, owner, peer]
@@ -2025,7 +1924,7 @@ async function markConversationRead(username, peerUsername, includeLetters = fal
         ? message.recipientUsername === owner && !message.senderUsername
         : message.recipientUsername === owner && message.senderUsername === peer;
 
-      if (match && !message.readAt && isMessageDelivered(message)) {
+      if (match && !message.readAt) {
         message.readAt = readAt;
         ids.push(message.id);
       }
@@ -2139,16 +2038,10 @@ async function listStarredMessages(username, options = {}) {
               reactions,
               starred_by AS "starredBy",
               expires_at AS "expiresAt",
-              deliver_at AS "deliverAt",
-              opened_at AS "openedAt",
-              memory_date AS "memoryDate",
-              memory_type AS "memoryType",
-              is_time_capsule AS "isTimeCapsule",
               read_at AS "readAt",
               created_at AS "createdAt"
             FROM messages
-            WHERE (sender_username = $1 OR recipient_username = $1)
-              AND (deliver_at IS NULL OR deliver_at <= NOW())
+            WHERE sender_username = $1 OR recipient_username = $1
             ORDER BY created_at DESC
             LIMIT $2
           `,
@@ -2157,80 +2050,9 @@ async function listStarredMessages(username, options = {}) {
       ).rows.map(normalizeMessage)
     : (await readJsonStore()).messages.filter(
         (message) => message.senderUsername === owner || message.recipientUsername === owner
-      ).filter(isMessageDelivered);
+      );
 
   return messages.filter((message) => (message.starredBy || []).includes(owner)).slice(0, limit);
-}
-
-async function listMemoryTimeline(username, options = {}) {
-  const owner = normalizeUsername(username);
-  const limit = clampLimit(options.limit, 80, 200);
-  await cleanupExpiredMessages();
-
-  const messages = usePostgres
-    ? (
-        await pool.query(
-          `
-            SELECT
-              id,
-              text,
-              sender_name AS "senderName",
-              sender_username AS "senderUsername",
-              recipient_username AS "recipientUsername",
-              kind,
-              attachment_url AS "attachmentUrl",
-              attachment_mime AS "attachmentMime",
-              attachment_name AS "attachmentName",
-              attachment_size AS "attachmentSize",
-              reply_to_id AS "replyToId",
-              reactions,
-              starred_by AS "starredBy",
-              expires_at AS "expiresAt",
-              deliver_at AS "deliverAt",
-              opened_at AS "openedAt",
-              memory_date AS "memoryDate",
-              memory_type AS "memoryType",
-              is_time_capsule AS "isTimeCapsule",
-              read_at AS "readAt",
-              created_at AS "createdAt"
-            FROM messages
-            WHERE (sender_username = $1 OR recipient_username = $1)
-              AND (deliver_at IS NULL OR deliver_at <= NOW())
-              AND (
-                starred_by LIKE $2
-                OR memory_type <> 'letter'
-                OR is_time_capsule = true
-                OR memory_date IS NOT NULL
-              )
-            ORDER BY COALESCE(memory_date::timestamptz, created_at) DESC, created_at DESC
-            LIMIT $3
-          `,
-          [owner, `%${owner}%`, limit * 2]
-        )
-      ).rows.map(normalizeMessage)
-    : (await readJsonStore()).messages
-        .filter((message) => message.senderUsername === owner || message.recipientUsername === owner)
-        .filter(isMessageDelivered)
-        .filter(
-          (message) =>
-            (message.starredBy || []).includes(owner) ||
-            message.memoryType !== "letter" ||
-            message.isTimeCapsule ||
-            message.memoryDate
-        )
-        .sort(
-          (a, b) =>
-            new Date(b.memoryDate || b.createdAt).getTime() - new Date(a.memoryDate || a.createdAt).getTime()
-        );
-
-  return messages
-    .filter((message) => {
-      if ((message.starredBy || []).includes(owner)) {
-        return true;
-      }
-      return message.memoryType !== "letter" || message.isTimeCapsule || message.memoryDate;
-    })
-    .slice(0, limit);
 }
 
 async function deleteMessage(id, username) {
@@ -2300,99 +2122,6 @@ async function cleanupAnalyticsLogs() {
     );
     await writeJsonStore(store);
   });
-}
-
-async function cleanupExpiredNotifications() {
-  const retentionDays = Math.max(7, Number(process.env.NOTIFICATION_RETENTION_DAYS || 30));
-
-  if (usePostgres) {
-    await pool.query("DELETE FROM notification_alerts WHERE expires_at IS NOT NULL AND expires_at <= NOW()");
-    await pool.query(
-      "DELETE FROM notification_alerts WHERE seen = true AND created_at < NOW() - ($1::text || ' days')::interval",
-      [retentionDays]
-    );
-    return;
-  }
-
-  await queuedWrite(async () => {
-    const store = await readJsonStore(false);
-    const now = Date.now();
-    const cutoff = now - retentionDays * 24 * 60 * 60 * 1000;
-    store.notificationAlerts = (store.notificationAlerts || [])
-      .map(normalizeNotification)
-      .filter((item) => !item.expiresAt || new Date(item.expiresAt).getTime() > now)
-      .filter((item) => !item.seen || new Date(item.createdAt).getTime() >= cutoff);
-    await writeJsonStore(store);
-  });
-}
-
-async function getStorageSummary() {
-  const tableNames = [
-    "inbox_users",
-    "messages",
-    "notification_alerts",
-    "login_history",
-    "user_activity_sessions",
-    "admin_action_logs",
-    "audit_logs",
-    "user_sessions"
-  ];
-
-  if (usePostgres) {
-    await initStore();
-    const tables = [];
-
-    for (const table of tableNames) {
-      const exists = await pool.query("SELECT to_regclass($1) AS table_name", [table]);
-
-      if (!exists.rows[0] || !exists.rows[0].table_name) {
-        tables.push({ table, rows: 0, bytes: 0, prettySize: "0 bytes", exists: false });
-        continue;
-      }
-
-      const [countResult, sizeResult] = await Promise.all([
-        pool.query(`SELECT COUNT(*)::integer AS rows FROM ${table}`),
-        pool.query(
-          "SELECT pg_total_relation_size($1::regclass)::bigint AS bytes, pg_size_pretty(pg_total_relation_size($1::regclass)) AS pretty_size",
-          [table]
-        )
-      ]);
-
-      tables.push({
-        table,
-        rows: Number(countResult.rows[0] && countResult.rows[0].rows) || 0,
-        bytes: Number(sizeResult.rows[0] && sizeResult.rows[0].bytes) || 0,
-        prettySize: (sizeResult.rows[0] && sizeResult.rows[0].pretty_size) || "0 bytes",
-        exists: true
-      });
-    }
-
-    return {
-      generatedAt: new Date().toISOString(),
-      storage: "postgres",
-      tables
-    };
-  }
-
-  const store = await readJsonStore();
-  let stat = { size: 0 };
-
-  try {
-    stat = await fs.stat(messagesFile);
-  } catch {
-    stat = { size: 0 };
-  }
-
-  return {
-    generatedAt: new Date().toISOString(),
-    storage: "json",
-    tables: [
-      { table: "messages.json", rows: store.messages.length, bytes: stat.size, prettySize: `${stat.size} bytes`, exists: true },
-      { table: "users", rows: store.users.length, bytes: 0, prettySize: "included", exists: true },
-      { table: "notificationAlerts", rows: (store.notificationAlerts || []).length, bytes: 0, prettySize: "included", exists: true },
-      { table: "loginHistory", rows: (store.loginHistory || []).length, bytes: 0, prettySize: "included", exists: true }
-    ]
-  };
 }
 
 async function markStaleUsersOffline() {
@@ -3582,7 +3311,6 @@ module.exports = {
   countActiveNotifications,
   cleanupExpiredMessages,
   cleanupAnalyticsLogs,
-  cleanupExpiredNotifications,
   createNotificationAlert,
   deleteMessage,
   deleteNotificationAlert,
@@ -3592,8 +3320,6 @@ module.exports = {
   findUser,
   findAccessibleMessage,
   getUserAvatar,
-  getPostgresPool,
-  getStorageSummary,
   getUltimateAdminMonitoring,
   initStore,
   listNotificationHistory,
@@ -3602,7 +3328,6 @@ module.exports = {
   listAdminActionLogs,
   listLetterMessages,
   listMessagesForUser,
-  listMemoryTimeline,
   listNotificationsForUser,
   listStarredMessages,
   listUserLoginHistory,

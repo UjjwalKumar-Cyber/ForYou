@@ -26,8 +26,6 @@ services:
         sync: false
       - key: ANALYTICS_RETENTION_DAYS
         value: "45"
-      - key: NOTIFICATION_RETENTION_DAYS
-        value: "30"
 
 databases:
   - name: foryou-db

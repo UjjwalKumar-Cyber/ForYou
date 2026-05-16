@@ -5,10 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="robots" content="noindex, nofollow">
     <meta name="theme-color" content="#2b1b25">
-    <title>ForyoU Memory Letters</title>
+    <title>ForyoU Letters</title>
     <link rel="manifest" href="/manifest.webmanifest">
     <link rel="preload" href="/assets/seal.svg" as="image" type="image/svg+xml">
-    <link rel="stylesheet" href="/css/styles.css?v=20260516-beta">
+    <link rel="stylesheet" href="/css/styles.css?v=20260516-popups3">
   </head>
   <body>
     <main class="page-shell admin-shell">
@@ -16,8 +16,8 @@
         <img class="seal" src="/assets/seal.svg" alt="" width="76" height="76" decoding="async">
         <p class="eyebrow">ForyoU Letters</p>
         <h1 id="admin-login-title">Open your private desk.</h1>
-        <p class="soft-copy">Your memories belong to you. This private tester space is for letters, hidden feelings, voice notes, and time capsules.</p>
-        <p class="tester-note">Private testing preview. Messages are private inside ForyoU, but not end-to-end encrypted yet.</p>
+        <p class="soft-copy">A quiet place for chats, letters, voice notes, and the words people keep.</p>
+        
 
         <form class="stack" id="admin-login-form" novalidate>
           <input type="hidden" name="scope" value="account">
@@ -31,11 +31,6 @@
           <p class="form-message" id="admin-login-message" role="status" aria-live="polite"></p>
           <button class="button primary-button" type="submit">Open inbox</button>
         </form>
-        <nav class="trust-links" aria-label="ForyoU trust pages">
-          <a href="/privacy">Privacy</a>
-          <a href="/terms">Terms</a>
-          <a href="/security">Security</a>
-        </nav>
       </section>
 
       <section class="letter-app is-hidden" id="messages-panel" aria-labelledby="messages-title">
@@ -43,7 +38,7 @@
           <div class="letter-brand">
             <div>
               <p class="eyebrow">ForyoU Letters</p>
-              <h1 id="messages-title">Memory room</h1>
+              <h1 id="messages-title">Chats</h1>
             </div>
             <button class="menu-button" id="account-menu-button" type="button" aria-label="Open account menu" aria-expanded="false">
               <span></span>
@@ -59,7 +54,7 @@
             <input class="text-input compact-input" id="chat-search" type="search" placeholder="Search chats">
           </div>
 
-          <p class="drawer-label sidebar-label">New letters</p>
+          <p class="drawer-label sidebar-label">New texts</p>
           <div class="chat-list" id="chat-list"></div>
           <p class="form-message" id="admin-status" role="status" aria-live="polite"></p>
         </aside>
@@ -76,7 +71,7 @@
             </div>
             <div class="conversation-actions">
               <button class="button secondary-button compact-button" id="view-profile-button" type="button">View profile</button>
-              <button class="button secondary-button compact-button" id="starred-button" type="button">Saved</button>
+              <button class="button secondary-button compact-button" id="starred-button" type="button">Starred</button>
             </div>
           </header>
 
@@ -105,7 +100,7 @@
                 <button class="composer-tool" id="clear-account-image" type="button" title="Clear selected media">Clear</button>
               </div>
 
-              <textarea class="textarea compact-textarea chat-textarea" id="account-message" name="message" maxlength="500" rows="1" placeholder="Write a memory..."></textarea>
+              <textarea class="textarea compact-textarea chat-textarea" id="account-message" name="message" maxlength="500" rows="1" placeholder="Message"></textarea>
 
               <button class="button primary-button send-button" id="account-send-button" type="submit">Send</button>
 
@@ -114,7 +109,7 @@
             </div>
 
             <div class="form-row">
-              <p class="file-hint" id="account-image-name">Letter, photo, video, file, or voice note. Saved memories stay out of auto-delete.</p>
+              <p class="file-hint" id="account-image-name">Text, photo, video, file, or voice note. Starred messages stay saved.</p>
               <p class="counter"><span id="account-character-count">0</span>/500</p>
             </div>
             <p class="form-message" id="account-message-status" role="status" aria-live="polite"></p>
@@ -204,9 +199,6 @@
               <p class="drawer-label">Popup history <span id="notification-active-count">0 active</span></p>
               <div class="notification-history-list" id="notification-history-list"></div>
 
-              <p class="drawer-label">Storage summary</p>
-              <div class="storage-summary" id="storage-summary"></div>
-
               <details class="monitor-details">
                 <summary>Login and security events</summary>
                 <div class="monitor-event-list" id="monitor-event-list"></div>
@@ -252,7 +244,7 @@
         <div class="reaction-row"></div>
         <div class="bubble-actions">
           <button type="button" data-action="reply">Reply</button>
-          <button type="button" data-action="star">Save</button>
+          <button type="button" data-action="star">Star</button>
           <button type="button" data-action="react">React</button>
           <button type="button" data-action="delete">Delete</button>
           <span class="read-receipt"></span>
@@ -261,6 +253,6 @@
     </template>
 
     <script src="/socket.io/socket.io.js" defer></script>
-    <script src="/js/admin.js?v=20260516-beta" defer></script>
+    <script src="/js/admin.js?v=20260516-popups3" defer></script>
   </body>
 </html>
