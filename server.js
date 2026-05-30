@@ -9,7 +9,6 @@ const compression = require("compression");
 const express = require("express");
 const rateLimit = require("express-rate-limit");
 const session = require("express-session");
-const PgSession = require("connect-pg-simple")(session);
 const helmet = require("helmet");
 const multer = require("multer");
 const sanitizeHtml = require("sanitize-html");
@@ -290,7 +289,11 @@ if (SERVICE_DISCONTINUED) {
   });
 }
 
-const sessionStore = !SERVICE_DISCONTINUED && process.env.DATABASE_URL
+const PgSession = !SERVICE_DISCONTINUED && process.env.DATABASE_URL
+  ? require("connect-pg-simple")(session)
+  : null;
+
+const sessionStore = PgSession
   ? new PgSession({
       conString: process.env.DATABASE_URL,
       createTableIfMissing: true,
