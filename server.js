@@ -1,12 +1,15 @@
 require("dotenv").config();
 
 const crypto = require("crypto");
+const fs = require("fs/promises");
 const http = require("http");
+const os = require("os");
 const path = require("path");
 const compression = require("compression");
 const express = require("express");
 const rateLimit = require("express-rate-limit");
 const session = require("express-session");
+const PgSession = require("connect-pg-simple")(session);
 const helmet = require("helmet");
 const multer = require("multer");
 const sanitizeHtml = require("sanitize-html");
@@ -22,6 +25,7 @@ const {
   cleanupAnalyticsLogs,
   cleanupExpiredMessages,
   cleanupStorageLogs,
+  createBackupExport,
   createNotificationAlert,
   deleteMessage,
   deleteNotificationAlert,
@@ -37,6 +41,7 @@ const {
   initStore,
   isRestrictedSearchTerm,
   listNotificationHistory,
+  listBackupHistory,
   listUserLoginHistory,
   listChatSummaries,
   listConversationMessages,
@@ -50,6 +55,7 @@ const {
   markNotificationsRead,
   markStaleUsersOffline,
   normalizeUsername,
+  recordBackupMetadata,
   recordLoginAttempt,
   startUserSession,
   subscribeNotificationAlerts,
@@ -76,6 +82,7 @@ const io = new Server(httpServer, {
 const PORT = Number(process.env.PORT || 3000);
 const SECRET_PATH = "/secret-8392-love-note";
 const SECRET_PAGE_ENABLED = process.env.ENABLE_SECRET_PAGE === "true";
+const SERVICE_DISCONTINUED = process.env.SERVICE_DISCONTINUED !== "false";
 const isProduction = process.env.NODE_ENV === "production";
 const ACTIVE_WINDOW_MS = 1000 * 60 * 2;
 const ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
@@ -85,10 +92,14 @@ const USER_LIST_LIMIT = 200;
 const MESSAGE_PAGE_LIMIT = 50;
 const CHAT_LIST_LIMIT = 50;
 const ADMIN_ROOM = "ultimate-admins";
+const APP_CACHE_VERSION = "20260516-backup5";
 const CLOUDINARY_ENABLED = Boolean(
   process.env.CLOUDINARY_URL ||
     (process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET)
 );
+const BACKUP_DIR = process.env.BACKUP_DIR || (isProduction
+  ? path.join(os.tmpdir(), "FORYOU_BACKUP")
+  : "/Users/ujjwalkumar/Downloads/FORYOU_BACKUP");
 const allowedImageTypes = new Set([
   "image/gif",
   "image/heic",
@@ -176,14 +187,15 @@ function requiredSecret(name, fallback) {
   return fallback;
 }
 
-const MESSAGE_PAGE_PASSWORD = SECRET_PAGE_ENABLED
+const MESSAGE_PAGE_PASSWORD = SECRET_PAGE_ENABLED && !SERVICE_DISCONTINUED
   ? requiredSecret("MESSAGE_PAGE_PASSWORD", "open-the-secret-note")
   : "";
-const ADMIN_PASSWORD = requiredSecret("ADMIN_PASSWORD", "admin-love-notes");
-const SESSION_SECRET = requiredSecret(
-  "SESSION_SECRET",
-  "local-development-session-secret-change-me"
-);
+const ADMIN_PASSWORD = SERVICE_DISCONTINUED
+  ? process.env.ADMIN_PASSWORD || ""
+  : requiredSecret("ADMIN_PASSWORD", "admin-love-notes");
+const SESSION_SECRET = SERVICE_DISCONTINUED
+  ? process.env.SESSION_SECRET || "discontinued-service-session-secret"
+  : requiredSecret("SESSION_SECRET", "local-development-session-secret-change-me");
 
 process.env.ADMIN_PASSWORD = ADMIN_PASSWORD;
 
@@ -243,27 +255,76 @@ app.use(
 app.use(express.json({ limit: "12kb" }));
 app.use(express.urlencoded({ extended: false, limit: "12kb" }));
 
-const sessionMiddleware = session({
-    name: "private_love_note.sid",
-    secret: SESSION_SECRET,
-    resave: false,
-    saveUninitialized: true,
-    rolling: true,
-    cookie: {
-      httpOnly: true,
-      maxAge: 1000 * 60 * 60 * 24 * 365,
-      sameSite: "strict",
-      secure: isProduction
-    }
+if (SERVICE_DISCONTINUED) {
+  app.use(
+    express.static(path.join(__dirname, "public"), {
+      etag: true,
+      maxAge: isProduction ? "7d" : 0,
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith("sw.js")) {
+          res.set("Cache-Control", "no-cache");
+          return;
+        }
+
+        if (isProduction && /\.(?:css|js|svg|webmanifest)$/i.test(filePath)) {
+          res.set("Cache-Control", "public, max-age=604800, immutable");
+        }
+      }
+    })
+  );
+
+  app.get("/robots.txt", (req, res) => {
+    res.type("text/plain").send("User-agent: *\nDisallow: /\n");
   });
 
-app.use(sessionMiddleware);
-io.engine.use(sessionMiddleware);
+  app.use((req, res) => {
+    res.set("Cache-Control", "no-store, private");
 
-app.use((req, res, next) => {
-  markUserActive(req.session.accountUser);
-  next();
-});
+    if (req.method === "GET" || req.method === "HEAD") {
+      return res.status(410).sendFile(path.join(__dirname, "views", "discontinued.html"));
+    }
+
+    return res.status(410).json({
+      error: "ForyoU service has been discontinued."
+    });
+  });
+}
+
+const sessionStore = !SERVICE_DISCONTINUED && process.env.DATABASE_URL
+  ? new PgSession({
+      conString: process.env.DATABASE_URL,
+      createTableIfMissing: true,
+      tableName: "session",
+      ttl: 365 * 24 * 60 * 60
+    })
+  : undefined;
+
+const sessionMiddleware = SERVICE_DISCONTINUED
+  ? null
+  : session({
+      name: "private_love_note.sid",
+      store: sessionStore,
+      secret: SESSION_SECRET,
+      resave: false,
+      saveUninitialized: true,
+      rolling: true,
+      cookie: {
+        httpOnly: true,
+        maxAge: 1000 * 60 * 60 * 24 * 365,
+        sameSite: "strict",
+        secure: isProduction
+      }
+    });
+
+if (sessionMiddleware) {
+  app.use(sessionMiddleware);
+  io.engine.use(sessionMiddleware);
+
+  app.use((req, res, next) => {
+    markUserActive(req.session.accountUser);
+    next();
+  });
+}
 
 const sessionKey = (req) => req.sessionID || "anonymous-session";
 
@@ -308,6 +369,17 @@ const searchLimiter = rateLimit({
   keyGenerator: sessionKey,
   message: {
     error: "Too many searches. Please wait a moment."
+  }
+});
+
+const backupLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 6,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  keyGenerator: sessionKey,
+  message: {
+    error: "Too many backup requests. Please wait before trying again."
   }
 });
 
@@ -800,12 +872,15 @@ async function buildAttachmentPayload(file, options = {}) {
 
   const optimizedFile = getImageMime(file) ? await optimizeImageFile(file, options) : file;
   const mime = getAttachmentMime(optimizedFile) || "application/octet-stream";
-  const storageUrl = await uploadToObjectStorage(optimizedFile, mime, options);
+  const storage = await uploadToObjectStorage(optimizedFile, mime, options);
 
-  if (storageUrl) {
+  if (storage && storage.url) {
     return {
       data: "",
-      url: storageUrl,
+      url: storage.url,
+      publicId: storage.publicId || "",
+      resourceType: storage.resourceType || "",
+      storage: "cloudinary",
       mime,
       name: cleanFileName(optimizedFile.originalname),
       size: optimizedFile.size,
@@ -816,6 +891,9 @@ async function buildAttachmentPayload(file, options = {}) {
   return {
     data: `data:${mime};base64,${optimizedFile.buffer.toString("base64")}`,
     url: "",
+    publicId: "",
+    resourceType: "",
+    storage: "database",
     mime,
     name: cleanFileName(optimizedFile.originalname),
     size: optimizedFile.size,
@@ -825,7 +903,7 @@ async function buildAttachmentPayload(file, options = {}) {
 
 async function uploadToObjectStorage(file, mime, options = {}) {
   if (!CLOUDINARY_ENABLED || !file || !file.buffer || !file.buffer.length) {
-    return "";
+    return null;
   }
 
   try {
@@ -839,11 +917,151 @@ async function uploadToObjectStorage(file, mime, options = {}) {
       overwrite: false
     });
 
-    return result.secure_url || result.url || "";
+    return {
+      url: result.secure_url || result.url || "",
+      publicId: result.public_id || "",
+      resourceType: result.resource_type || attachmentKindForMime(mime),
+      bytes: result.bytes || file.size || 0
+    };
   } catch (error) {
     console.warn("Cloudinary upload skipped; falling back to database storage.", error.message);
-    return "";
+    return null;
   }
+}
+
+function backupTimestamp(date = new Date()) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate())
+  ].join("-") + `-${pad(date.getHours())}${pad(date.getMinutes())}`;
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes || 0);
+  const units = ["B", "KB", "MB", "GB"];
+  let size = Number.isFinite(value) ? value : 0;
+  let index = 0;
+
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024;
+    index += 1;
+  }
+
+  return `${size.toFixed(index === 0 ? 0 : 2)} ${units[index]}`;
+}
+
+async function writeBackupJson(filePath, value) {
+  const text = JSON.stringify(value, null, 2) + "\n";
+  await fs.writeFile(filePath, text, "utf8");
+  return Buffer.byteLength(text);
+}
+
+async function uploadBackupToCloudinary(filePath, fileName) {
+  if (!CLOUDINARY_ENABLED) {
+    return null;
+  }
+
+  const bytes = await fs.readFile(filePath);
+  const dataUri = `data:application/json;base64,${bytes.toString("base64")}`;
+  const result = await cloudinary.uploader.upload(dataUri, {
+    folder: "foryou/backups",
+    resource_type: "raw",
+    public_id: fileName.replace(/\.json$/i, ""),
+    overwrite: false
+  });
+
+  return {
+    url: result.secure_url || result.url || "",
+    publicId: result.public_id || "",
+    bytes: result.bytes || bytes.length
+  };
+}
+
+async function createAdminBackup(adminUsername) {
+  const createdAt = new Date();
+  const stamp = backupTimestamp(createdAt);
+  const folderName = `foryou-backup-${stamp}`;
+  const folderPath = path.join(BACKUP_DIR, folderName);
+  const bundleName = `${folderName}.json`;
+  const bundlePath = path.join(BACKUP_DIR, bundleName);
+  const exportData = await createBackupExport({
+    createdBy: adminUsername,
+    appVersion: APP_CACHE_VERSION
+  });
+  const fileSizes = {};
+
+  await fs.mkdir(folderPath, { recursive: true });
+
+  const files = {
+    "inbox_users.json": exportData.inboxUsers,
+    "messages.json": exportData.messages,
+    "notification_alerts.json": exportData.notificationAlerts,
+    "login_history.json": exportData.loginHistory,
+    "user_activity_sessions.json": exportData.userActivitySessions,
+    "admin_action_logs.json": exportData.adminActionLogs,
+    "important_audit_logs.json": exportData.importantAuditLogs,
+    "restricted_search_terms.json": exportData.restrictedSearchTerms,
+    "backup_history.json": exportData.backupHistory,
+    "media_manifest.json": exportData.mediaManifest
+  };
+
+  for (const [fileName, value] of Object.entries(files)) {
+    fileSizes[fileName] = await writeBackupJson(path.join(folderPath, fileName), value);
+  }
+
+  const manifest = {
+    backupTimestamp: exportData.createdAt,
+    createdBy: normalizeUsername(adminUsername),
+    appVersion: APP_CACHE_VERSION,
+    database: exportData.database,
+    mediaStorageMode: CLOUDINARY_ENABLED ? "Cloudinary" : "Database",
+    cloudinaryConfigured: CLOUDINARY_ENABLED,
+    renderProduction: isProduction,
+    rowCounts: exportData.rowCounts,
+    fileSizes,
+    warning: "Restore is manual/admin-only. This backup intentionally excludes environment secrets."
+  };
+
+  fileSizes["manifest.json"] = await writeBackupJson(path.join(folderPath, "manifest.json"), manifest);
+
+  const bundle = {
+    manifest,
+    tables: files
+  };
+  const bundleSize = await writeBackupJson(bundlePath, bundle);
+  let cloudinaryBackup = null;
+  let storageMode = isProduction ? "temporary" : "local";
+
+  if (CLOUDINARY_ENABLED) {
+    cloudinaryBackup = await uploadBackupToCloudinary(bundlePath, bundleName);
+    storageMode = "cloudinary";
+  }
+
+  const record = await recordBackupMetadata({
+    id: crypto.randomUUID(),
+    createdAt: exportData.createdAt,
+    createdBy: adminUsername,
+    status: "completed",
+    storageMode,
+    fileName: bundleName,
+    filePath: isProduction && cloudinaryBackup ? "" : bundlePath,
+    downloadUrl: cloudinaryBackup ? cloudinaryBackup.url : "",
+    cloudinaryPublicId: cloudinaryBackup ? cloudinaryBackup.publicId : "",
+    sizeBytes: cloudinaryBackup ? cloudinaryBackup.bytes : bundleSize,
+    rowCounts: exportData.rowCounts,
+    manifest
+  });
+
+  return {
+    ok: true,
+    backup: record,
+    folderPath: isProduction ? "" : folderPath,
+    filePath: isProduction && cloudinaryBackup ? "" : bundlePath,
+    downloadUrl: cloudinaryBackup ? cloudinaryBackup.url : "",
+    size: formatBytes(record.sizeBytes)
+  };
 }
 
 function pickUploadedFile(req) {
@@ -1950,8 +2168,88 @@ app.get("/api/admin/monitoring", requireUltimateAdmin, analyticsLimiter, async (
 app.get("/api/admin/storage-summary", requireUltimateAdmin, analyticsLimiter, async (req, res, next) => {
   try {
     noStore(res);
-    const summary = await getStorageSummary();
-    return res.json({ ok: true, summary });
+    const [summary, backups] = await Promise.all([
+      getStorageSummary(),
+      listBackupHistory({ limit: 1 })
+    ]);
+    return res.json({
+      ok: true,
+      summary: {
+        ...summary,
+        mediaStorageMode: CLOUDINARY_ENABLED ? "Cloudinary" : "Database",
+        latestBackup: backups[0] || null
+      }
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get("/api/admin/backups", requireUltimateAdmin, analyticsLimiter, async (req, res, next) => {
+  try {
+    noStore(res);
+    const backups = await listBackupHistory({ limit: req.query.limit || 20 });
+    return res.json({ ok: true, backups });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post("/api/admin/backup", requireUltimateAdmin, backupLimiter, async (req, res, next) => {
+  try {
+    noStore(res);
+    const result = await createAdminBackup(req.session.accountUser.username);
+
+    await logAdminAction({
+      adminUsername: req.session.accountUser.username,
+      action: "create_backup",
+      details: {
+        backupId: result.backup.id,
+        storageMode: result.backup.storageMode,
+        sizeBytes: result.backup.sizeBytes
+      },
+      ipAddress: getClientIp(req)
+    });
+
+    scheduleAdminMonitoringUpdate();
+    return res.status(201).json(result);
+  } catch (error) {
+    await recordBackupMetadata({
+      id: crypto.randomUUID(),
+      createdAt: new Date().toISOString(),
+      createdBy: req.session.accountUser && req.session.accountUser.username,
+      status: "failed",
+      storageMode: CLOUDINARY_ENABLED ? "cloudinary" : "local",
+      error: error.message || "Backup failed"
+    }).catch(() => {});
+    return next(error);
+  }
+});
+
+app.post("/api/admin/cleanup-logs", requireUltimateAdmin, analyticsLimiter, async (req, res, next) => {
+  try {
+    noStore(res);
+
+    if (!req.body || req.body.confirm !== true) {
+      return res.status(400).json({
+        error: "This deletes logs only. Messages, users, memories and media stay safe."
+      });
+    }
+
+    const result = await cleanupStorageLogs();
+
+    await logAdminAction({
+      adminUsername: req.session.accountUser.username,
+      action: "cleanup_old_logs",
+      details: {
+        totalRowsRemoved: result.totalRowsRemoved,
+        totalSavedBytes: result.totalSavedBytes
+      },
+      ipAddress: getClientIp(req)
+    });
+
+    scheduleAdminMonitoringUpdate();
+    return res.json(result);
   } catch (error) {
     return next(error);
   }
@@ -2239,8 +2537,29 @@ app.use((error, req, res, next) => {
   return res.status(500).json({ error: "Something went wrong." });
 });
 
-initStore()
-  .then(() => {
+function startHttpServer() {
+  httpServer.listen(PORT, () => {
+    console.log(`ForyoU running on http://localhost:${PORT}`);
+
+    if (SERVICE_DISCONTINUED) {
+      console.log("Service discontinued mode is active; all routes show the archive notice.");
+      return;
+    }
+
+    console.log(`Login page: http://localhost:${PORT}/admin`);
+    if (SECRET_PAGE_ENABLED) {
+      console.log(`Secret page: http://localhost:${PORT}${SECRET_PATH}`);
+    } else {
+      console.log(`Secret page disabled; ${SECRET_PATH} redirects to /admin`);
+    }
+  });
+}
+
+if (SERVICE_DISCONTINUED) {
+  startHttpServer();
+} else {
+  initStore()
+    .then(() => {
     subscribeNotificationAlerts(async ({ id }) => {
       const notification = await findNotificationAlert(id);
       if (notification) {
@@ -2275,18 +2594,11 @@ initStore()
         });
     }, 60 * 1000);
 
-    httpServer.listen(PORT, () => {
-      console.log(`ForyoU running on http://localhost:${PORT}`);
-      console.log(`Login page: http://localhost:${PORT}/admin`);
-      if (SECRET_PAGE_ENABLED) {
-        console.log(`Secret page: http://localhost:${PORT}${SECRET_PATH}`);
-      } else {
-        console.log(`Secret page disabled; ${SECRET_PATH} redirects to /admin`);
-      }
+    startHttpServer();
+    })
+    .catch((error) => {
+      console.error("Could not initialize message storage.");
+      console.error(error);
+      process.exit(1);
     });
-  })
-  .catch((error) => {
-    console.error("Could not initialize message storage.");
-    console.error(error);
-    process.exit(1);
-  });
+}

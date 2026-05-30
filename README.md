@@ -66,8 +66,9 @@ foryou/
 - PWA manifest and service worker for app-like loading of static assets
 - Long-lived sessions with manual logout
 - Transparent ultimate-admin monitoring for online status, last seen, login history, suspicious login attempts, device/browser summaries, and approximate IP-based city/country
-- Admin account block/suspend controls, search visibility controls, popup alerts, and one-click log cleanup
-- Optional Cloudinary media storage so profile pictures and uploads are stored as URLs instead of large database blobs
+- Admin account block/suspend controls, search visibility controls, popup alerts, storage dashboard, backups, and one-click log cleanup
+- Optional Cloudinary media storage so profile pictures, chat images, voice notes, videos, and attachments are stored as URLs with public IDs instead of large database blobs
+- PostgreSQL-backed sessions in production when `DATABASE_URL` is configured
 - `helmet` security headers and `express-rate-limit`
 - Server-side sanitization with `sanitize-html`
 - Client-side rendering avoids injecting user text as HTML
@@ -84,11 +85,25 @@ cp .env.example .env
 Edit `.env`:
 
 ```bash
+SERVICE_DISCONTINUED=true
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=your-admin-password
 SESSION_SECRET=generate-a-long-random-string
 ENABLE_SECRET_PAGE=false
 ```
+
+## Archived Service Mode
+
+The project is currently set to archived/discontinued mode with:
+
+```bash
+SERVICE_DISCONTINUED=true
+```
+
+In this mode, every public page shows a simple discontinued notice, API requests
+return `410 Gone`, and the server does not initialize the chat database. The old
+chat/admin/profile code remains in the project archive. To temporarily restore
+the full app later, set `SERVICE_DISCONTINUED=false` and redeploy.
 
 Generate a session secret:
 
@@ -106,6 +121,12 @@ Optional Cloudinary media storage:
 
 ```bash
 CLOUDINARY_URL=cloudinary://API_KEY:API_SECRET@CLOUD_NAME
+```
+
+Optional local backup folder:
+
+```bash
+BACKUP_DIR=/Users/ujjwalkumar/Downloads/FORYOU_BACKUP
 ```
 
 The app stores password hashes, not readable passwords. To manually create a hashed password:
@@ -162,6 +183,9 @@ DELETE /api/messages/:id
 POST   /api/ping
 GET    /api/admin/monitoring
 GET    /api/admin/storage-summary
+GET    /api/admin/backups
+POST   /api/admin/backup
+POST   /api/admin/cleanup-logs
 POST   /api/admin/cleanup-storage
 GET    /api/admin/users/:username/logins
 PATCH  /api/admin/users/:username/security
@@ -188,6 +212,34 @@ replyToId=optional-message-id
 ```
 
 Logged-in users can send account-to-account messages from the chat composer. Public secret-page sending is disabled unless you intentionally set `ENABLE_SECRET_PAGE=true` and configure `MESSAGE_PAGE_PASSWORD`.
+
+## Backups
+
+Ultimate admins can use **Storage & Backup** in the admin drawer.
+
+Local development backups are written to:
+
+```text
+/Users/ujjwalkumar/Downloads/FORYOU_BACKUP/foryou-backup-YYYY-MM-DD-HHMM/
+```
+
+Each backup contains:
+
+- `manifest.json`
+- `inbox_users.json`
+- `messages.json`
+- `notification_alerts.json`
+- `login_history.json`
+- `user_activity_sessions.json`
+- `admin_action_logs.json`
+- `important_audit_logs.json`
+- `restricted_search_terms.json`
+- `backup_history.json`
+- `media_manifest.json`
+
+A combined `foryou-backup-YYYY-MM-DD-HHMM.json` bundle is also created. In production on Render, local files are temporary; if Cloudinary is configured, the bundle is uploaded as Cloudinary raw storage and the URL is saved in backup history.
+
+Restore is intentionally manual for now. To restore, stop the app, inspect the backup JSON files, import rows into PostgreSQL in dependency order (`inbox_users`, then `messages`, then notification/log tables), and keep environment secrets from Render or `.env`; backups do not include `DATABASE_URL`, `SESSION_SECRET`, or Cloudinary secrets.
 
 ## Render Deployment
 
