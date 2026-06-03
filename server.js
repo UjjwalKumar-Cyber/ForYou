@@ -25,6 +25,7 @@ const {
   cleanupExpiredMessages,
   cleanupStorageLogs,
   createBackupExport,
+  createMemoryEntry,
   createNotificationAlert,
   deleteMessage,
   deleteNotificationAlert,
@@ -34,6 +35,7 @@ const {
   findUser,
   findAccessibleMessage,
   getStorageSummary,
+  getPrivateYearbook,
   getUltimateAdminMonitoring,
   getUserAvatar,
   heartbeatUserSession,
@@ -46,6 +48,8 @@ const {
   listConversationMessages,
   listLetterMessages,
   listMessagesForUser,
+  listMemoryEntries,
+  listMemoryTimeline,
   listNotificationsForUser,
   listStarredMessages,
   listUsers,
@@ -54,6 +58,7 @@ const {
   markNotificationsRead,
   markStaleUsersOffline,
   normalizeUsername,
+  openMemoryEntry,
   recordBackupMetadata,
   recordLoginAttempt,
   startUserSession,
@@ -93,7 +98,7 @@ const USER_LIST_LIMIT = 200;
 const MESSAGE_PAGE_LIMIT = 50;
 const CHAT_LIST_LIMIT = 50;
 const ADMIN_ROOM = "ultimate-admins";
-const APP_CACHE_VERSION = "20260516-backup5";
+const APP_CACHE_VERSION = "20260603-memories1";
 const WATCH_ROOM_TTL_MS = 1000 * 60 * 60 * 12;
 const CLOUDINARY_ENABLED = Boolean(
   process.env.CLOUDINARY_URL ||
@@ -1027,6 +1032,7 @@ async function createAdminBackup(adminUsername) {
     "admin_action_logs.json": exportData.adminActionLogs,
     "important_audit_logs.json": exportData.importantAuditLogs,
     "restricted_search_terms.json": exportData.restrictedSearchTerms,
+    "memory_entries.json": exportData.memoryEntries,
     "backup_history.json": exportData.backupHistory,
     "media_manifest.json": exportData.mediaManifest
   };
@@ -1822,15 +1828,22 @@ watchNamespace.on("connection", (socket) => {
   socket.on("watch:reaction", (payload = {}) => {
     const roomId = socket.data.watchRoomId;
     const room = roomId ? watchRooms.get(roomId) : null;
-    const reaction = cleanText(payload.reaction).slice(0, 8) || "heart";
+    const allowedReactions = new Set(["heart", "miss-you", "cute", "memory", "again", "wait"]);
+    const requestedReaction = cleanText(payload.reaction).slice(0, 24);
+    const reaction = allowedReactions.has(requestedReaction) ? requestedReaction : "heart";
+    const currentTime = Math.max(0, Math.min(Number(payload.currentTime) || room?.currentTime || 0, 60 * 60 * 12));
 
     if (!room) {
       return;
     }
 
+    room.touchedAt = Date.now();
     watchNamespace.to(watchRoom(room.roomId)).emit("watch:reaction", {
       reaction,
+      username: socket.data.watchUsername || "",
       displayName: socket.data.watchDisplayName || "Someone",
+      currentTime,
+      source: room.source,
       createdAt: new Date().toISOString()
     });
   });
@@ -1909,6 +1922,60 @@ function publicNotification(notification) {
     expiresAt: notification.expiresAt || notification.expires_at || null,
     sentBy: notification.sentBy || notification.sent_by || ""
   };
+}
+
+function memoryKindLabel(type) {
+  if (type === "open_when") return "Open When Letter";
+  if (type === "time_capsule") return "Time Capsule";
+  if (type === "starred_message") return "Starred Message";
+  return "Memory";
+}
+
+function isPublicMemoryLocked(memory) {
+  if (!memory || !memory.unlockAt) {
+    return false;
+  }
+
+  const unlockTime = new Date(memory.unlockAt).getTime();
+  return Number.isFinite(unlockTime) && unlockTime > Date.now();
+}
+
+function publicMemory(memory, viewerUsername = "") {
+  const locked = Boolean(memory.locked || isPublicMemoryLocked(memory));
+
+  return {
+    itemType: memory.itemType || memory.type || "memory",
+    id: String(memory.id || ""),
+    type: memory.type || memory.itemType || "memory",
+    kindLabel: memoryKindLabel(memory.itemType || memory.type),
+    title: memory.title || "Untitled memory",
+    body: locked ? "" : memory.body || "",
+    preview: locked ? "This memory is sealed until its open date." : String(memory.body || "").slice(0, 180),
+    prompt: memory.prompt || "",
+    ownerUsername: memory.ownerUsername || "",
+    peerUsername: memory.peerUsername || "",
+    createdBy: memory.createdBy || "",
+    isMine: normalizeUsername(memory.createdBy) === normalizeUsername(viewerUsername),
+    unlockAt: memory.unlockAt || null,
+    openedAt: memory.openedAt || null,
+    starred: Boolean(memory.starred),
+    locked,
+    createdAt: memory.createdAt || new Date().toISOString(),
+    updatedAt: memory.updatedAt || memory.createdAt || new Date().toISOString()
+  };
+}
+
+function emitMemoryUpdate(memory) {
+  const payload = { memory: publicMemory(memory), generatedAt: new Date().toISOString() };
+  const users = new Set([
+    normalizeUsername(memory.ownerUsername),
+    normalizeUsername(memory.peerUsername),
+    normalizeUsername(memory.createdBy)
+  ].filter(Boolean));
+
+  for (const username of users) {
+    io.to(userRoom(username)).emit("memory:update", payload);
+  }
 }
 
 function isNotificationDeliverable(notification) {
@@ -2767,6 +2834,167 @@ app.post("/api/messages/:id/reactions", requireAccount, async (req, res, next) =
 
     emitMessageMutation(message, "chat:reaction");
     return res.json({ ok: true, message });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get("/api/memories/timeline", requireAccount, async (req, res, next) => {
+  try {
+    noStore(res);
+    const timeline = await listMemoryTimeline(req.session.accountUser.username, {
+      limit: req.query.limit || 120
+    });
+
+    return res.json({
+      timeline: timeline.map((item) => publicMemory(item, req.session.accountUser.username))
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get("/api/memories/yearbook", requireAccount, async (req, res, next) => {
+  try {
+    noStore(res);
+    const yearbook = await getPrivateYearbook(req.session.accountUser.username, {
+      year: req.query.year
+    });
+
+    return res.json({
+      ...yearbook,
+      months: yearbook.months.map((month) => ({
+        ...month,
+        items: month.items.map((item) => publicMemory(item, req.session.accountUser.username))
+      }))
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get("/api/memories", requireAccount, async (req, res, next) => {
+  try {
+    noStore(res);
+    const type = String(req.query.type || "").trim();
+    const entries = await listMemoryEntries(req.session.accountUser.username, {
+      type,
+      limit: req.query.limit || 120
+    });
+
+    return res.json({
+      memories: entries.map((entry) => publicMemory(entry, req.session.accountUser.username))
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post("/api/memories", requireAccount, analyticsLimiter, async (req, res, next) => {
+  try {
+    noStore(res);
+    const allowedTypes = new Set(["memory", "open_when", "time_capsule"]);
+    const requestedType = String(req.body && req.body.type || "memory").trim().toLowerCase();
+    const type = allowedTypes.has(requestedType) ? requestedType : "memory";
+    const peerUsername = normalizeUsername(req.body && req.body.peerUsername);
+    const title = cleanText(req.body && req.body.title).slice(0, 120);
+    const body = cleanText(req.body && req.body.body).slice(0, 2000);
+    const prompt = cleanText(req.body && req.body.prompt).slice(0, 160);
+    const starred = Boolean(req.body && req.body.starred);
+    const requestedUnlockAt = req.body && req.body.unlockAt ? new Date(req.body.unlockAt) : null;
+    let unlockAt = requestedUnlockAt && !Number.isNaN(requestedUnlockAt.getTime())
+      ? requestedUnlockAt.toISOString()
+      : null;
+
+    if (type === "time_capsule" && !unlockAt) {
+      unlockAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    }
+
+    if (!peerUsername) {
+      return res.status(400).json({ error: "Choose who this memory belongs with." });
+    }
+
+    if (peerUsername === normalizeUsername(req.session.accountUser.username)) {
+      return res.status(400).json({ error: "Choose the other person for this memory." });
+    }
+
+    if (!title || !body) {
+      return res.status(400).json({ error: "Title and letter text are required." });
+    }
+
+    if (Array.from(body).length > 2000) {
+      return res.status(400).json({ error: "Please keep memory text under 2000 characters." });
+    }
+
+    const peer = await findUser(peerUsername);
+
+    if (!peer) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    if (!isUltimateAdmin(req.session.accountUser)) {
+      const existingConversation = await userHasConversation(req.session.accountUser.username, peer.username);
+      const searchedThisSession = hasAllowedChat(req, peer.username);
+      const restrictedTarget = peer.role === "ultimate_admin" || peer.searchHidden || isAccountBlocked(peer);
+
+      if (restrictedTarget && !existingConversation) {
+        return res.status(403).json({ error: "NOT ALLOWED" });
+      }
+
+      if (!existingConversation && !searchedThisSession) {
+        return res.status(403).json({ error: "Enter exact username before creating a memory." });
+      }
+    }
+
+    const memory = await createMemoryEntry({
+      type,
+      ownerUsername: req.session.accountUser.username,
+      peerUsername: peer.username,
+      createdBy: req.session.accountUser.username,
+      title,
+      body,
+      prompt,
+      unlockAt,
+      starred
+    });
+
+    if (!memory) {
+      return res.status(400).json({ error: "Could not save this memory." });
+    }
+
+    emitMemoryUpdate(memory);
+    return res.status(201).json({
+      ok: true,
+      memory: publicMemory(memory, req.session.accountUser.username)
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post("/api/memories/:id/open", requireAccount, analyticsLimiter, async (req, res, next) => {
+  try {
+    noStore(res);
+
+    if (!/^[a-f0-9-]{36}$/i.test(String(req.params.id || ""))) {
+      return res.status(400).json({ error: "Invalid memory id." });
+    }
+
+    const result = await openMemoryEntry(req.params.id, req.session.accountUser.username);
+
+    if (!result || !result.entry) {
+      return res.status(404).json({ error: "Memory not found." });
+    }
+
+    if (!result.locked) {
+      emitMemoryUpdate(result.entry);
+    }
+
+    return res.json({
+      ok: true,
+      locked: Boolean(result.locked),
+      memory: publicMemory(result.entry, req.session.accountUser.username)
+    });
   } catch (error) {
     return next(error);
   }

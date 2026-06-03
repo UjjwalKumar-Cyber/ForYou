@@ -109,6 +109,23 @@
     }, 2600);
   }
 
+  function formatWatchTime(seconds) {
+    const value = Math.max(0, Math.floor(Number(seconds) || 0));
+    const minutes = Math.floor(value / 60);
+    const remaining = String(value % 60).padStart(2, "0");
+    return `${minutes}:${remaining}`;
+  }
+
+  function reactionLabel(reaction) {
+    if (reaction === "heart") return "sent a heart";
+    if (reaction === "miss-you") return "said miss you";
+    if (reaction === "cute") return "marked it cute";
+    if (reaction === "memory") return "saved this as a moment";
+    if (reaction === "again") return "wants to watch again";
+    if (reaction === "wait") return "said wait";
+    return "reacted";
+  }
+
   function renderViewers(viewers = []) {
     if (!viewers.length) {
       viewersElement.textContent = "Waiting for someone to join...";
@@ -490,13 +507,9 @@
       renderChat(latestState.chatMessages);
     });
 
-    socket.on("watch:reaction", ({ reaction, displayName }) => {
-      const label = reaction === "heart"
-        ? "sent a heart"
-        : reaction === "miss-you"
-          ? "said miss you"
-          : "said cute";
-      showToast(`${displayName || "Someone"} ${label}`);
+    socket.on("watch:reaction", ({ reaction, displayName, currentTime }) => {
+      const atTime = currentTime ? ` at ${formatWatchTime(currentTime)}` : "";
+      showToast(`${displayName || "Someone"} ${reactionLabel(reaction)}${atTime}`);
     });
   }
 
@@ -619,7 +632,8 @@
   document.querySelectorAll("[data-reaction]").forEach((button) => {
     button.addEventListener("click", () => {
       socket.emit("watch:reaction", {
-        reaction: button.dataset.reaction
+        reaction: button.dataset.reaction,
+        currentTime: currentPlayerTime()
       });
     });
   });

@@ -1,6 +1,6 @@
 # ForyoU
 
-ForyoU is a private, nostalgic messaging website built with Node.js, Express, Socket.IO, and SQLite-style JSON storage locally or Postgres on Render. The main public entry is the account login at `/admin`, with logged-in account chats, realtime delivery, media sharing, profiles, voice notes, starred messages, and a warm handwritten-letter style UI.
+ForyoU is a private, nostalgic messaging website built with Node.js, Express, Socket.IO, and SQLite-style JSON storage locally or Postgres on Render. The main public entry is the account login at `/admin`, with logged-in account chats, realtime delivery, media sharing, profiles, voice notes, starred messages, Watch Together, private memories, open-when letters, couple time capsules, and a warm handwritten-letter style UI.
 
 Locally, data is saved in `data/messages.json`. On Render, the included Blueprint uses Render Postgres through `DATABASE_URL`.
 
@@ -20,7 +20,8 @@ foryou/
 │   │   ├── admin.js
 │   │   ├── message.js
 │   │   ├── profile.js
-│   │   └── secret-login.js
+│   │   ├── secret-login.js
+│   │   └── watch-together.js
 │   ├── manifest.webmanifest
 │   └── sw.js
 ├── scripts/
@@ -34,7 +35,8 @@ foryou/
 │   ├── admin.html
 │   ├── message.html
 │   ├── password.html
-│   └── profile.html
+│   ├── profile.html
+│   └── watch-together.html
 ├── .env.example
 ├── .gitignore
 ├── package.json
@@ -59,6 +61,11 @@ foryou/
 - Privacy-first chat access: regular users do not see online status, active friends, or last seen
 - Exact username search for starting new chats, with admin-controlled hidden users
 - Starred messages that stay saved
+- Memory Timeline combining saved memories, open-when letters, couple time capsules, and starred messages
+- Open When Letters with an optional prompt like “open when you miss me”
+- Couple Time Capsule messages with delayed unlock dates
+- Private Yearbook summary grouped by year and month
+- Watch Together reactions for shared moments while watching videos
 - Delete option inside each message history
 - Normal messages auto-expire after 24 hours unless starred
 - Profile settings for display name, username, password, profile photo, bio, email, theme, wallpaper, font, and color
@@ -180,6 +187,11 @@ GET    /api/messages
 GET    /api/messages/starred
 POST   /api/messages/:id/star
 POST   /api/messages/:id/reactions
+GET    /api/memories/timeline
+GET    /api/memories/yearbook?year=YYYY
+GET    /api/memories?type=open_when
+POST   /api/memories
+POST   /api/memories/:id/open
 DELETE /api/messages/:id
 POST   /api/ping
 GET    /api/admin/monitoring
@@ -235,6 +247,7 @@ Each backup contains:
 - `admin_action_logs.json`
 - `important_audit_logs.json`
 - `restricted_search_terms.json`
+- `memory_entries.json`
 - `backup_history.json`
 - `media_manifest.json`
 

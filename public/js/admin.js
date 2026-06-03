@@ -40,6 +40,8 @@ const peerStatus = document.querySelector("#peer-status");
 const backChatButton = document.querySelector("#back-chat-button");
 const viewProfileButton = document.querySelector("#view-profile-button");
 const watchTogetherButton = document.querySelector("#watch-together-button");
+const memoriesButton = document.querySelector("#memories-button");
+const drawerMemoriesButton = document.querySelector("#drawer-memories-button");
 const peerProfilePanel = document.querySelector("#peer-profile-panel");
 const peerProfileBackdrop = document.querySelector("#peer-profile-backdrop");
 const peerProfileClose = document.querySelector("#peer-profile-close");
@@ -53,6 +55,24 @@ const watchInAppPanel = document.querySelector("#watch-in-app-panel");
 const watchInAppFrame = document.querySelector("#watch-in-app-frame");
 const watchInAppClose = document.querySelector("#watch-in-app-close");
 const watchInAppTitle = document.querySelector("#watch-in-app-title");
+const memoriesPanel = document.querySelector("#memories-panel");
+const memoriesBackdrop = document.querySelector("#memories-backdrop");
+const memoriesClose = document.querySelector("#memories-close");
+const memoryTabs = document.querySelectorAll("[data-memory-tab]");
+const memoryForm = document.querySelector("#memory-form");
+const memoryType = document.querySelector("#memory-type");
+const memoryPeer = document.querySelector("#memory-peer");
+const memoryTitle = document.querySelector("#memory-title");
+const memoryPrompt = document.querySelector("#memory-prompt");
+const memoryUnlockAt = document.querySelector("#memory-unlock-at");
+const memoryBody = document.querySelector("#memory-body");
+const memoryStarred = document.querySelector("#memory-starred");
+const memorySaveButton = document.querySelector("#memory-save-button");
+const memoryStatus = document.querySelector("#memory-status");
+const memoryContent = document.querySelector("#memory-content");
+const yearbookToolbar = document.querySelector("#yearbook-toolbar");
+const yearbookYear = document.querySelector("#yearbook-year");
+const yearbookRefresh = document.querySelector("#yearbook-refresh");
 const ultimateAdminPanel = document.querySelector("#ultimate-admin-panel");
 const monitorStats = document.querySelector("#monitor-stats");
 const monitorUserList = document.querySelector("#monitor-user-list");
@@ -104,6 +124,8 @@ let hasOlderMessages = false;
 let loadingOlderMessages = false;
 let activeWatchRoomId = "";
 let watchInviteCooldownUntil = 0;
+let activeMemoryTab = "timeline";
+let memoriesLoaded = false;
 const displayedNotificationIds = new Set();
 
 function setStatus(text, type = "neutral") {
@@ -217,6 +239,7 @@ function showLoginPanel() {
     socket = null;
   }
   closeDrawer();
+  closeMemoriesPanel();
   messagesPanel.classList.add("is-hidden");
   loginPanel.classList.remove("is-hidden");
 }
@@ -612,6 +635,322 @@ function populateNotificationRecipients() {
     : "__broadcast__";
 }
 
+function memoryTypeLabel(type) {
+  if (type === "open_when") return "Open When";
+  if (type === "time_capsule") return "Time Capsule";
+  if (type === "starred_message") return "Starred Message";
+  return "Memory";
+}
+
+function memoryPeerLabel(memory) {
+  const username = memory.peerUsername && memory.peerUsername !== currentUser.username
+    ? memory.peerUsername
+    : memory.ownerUsername;
+  const peer = getRecipient(username) || conversations.map(conversationDisplay).find((user) => user.username === username);
+  return peer ? peer.displayName || peer.username : username || "Someone";
+}
+
+function populateMemoryRecipients() {
+  if (!memoryPeer) {
+    return;
+  }
+
+  const currentValue = memoryPeer.value || currentPeer || "";
+  const seen = new Set();
+  const options = [];
+  const candidates = [
+    ...recipients,
+    ...conversations.map(conversationDisplay)
+  ];
+
+  for (const user of candidates) {
+    if (!user || !user.username || user.username === currentUser?.username || user.username === "__letters__") {
+      continue;
+    }
+
+    if (seen.has(user.username)) {
+      continue;
+    }
+
+    seen.add(user.username);
+    options.push(new Option(`${user.displayName || user.username} @${user.username}`, user.username));
+  }
+
+  if (!options.length) {
+    options.push(new Option("Search a username first", ""));
+  }
+
+  memoryPeer.replaceChildren(...options);
+  memoryPeer.value = options.some((option) => option.value === currentValue)
+    ? currentValue
+    : options[0].value;
+}
+
+function setMemoryStatus(text, type = "neutral") {
+  setInlineStatus(memoryStatus, text, type);
+}
+
+function switchMemoryTab(tab) {
+  activeMemoryTab = tab || "timeline";
+  memoryTabs.forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.memoryTab === activeMemoryTab);
+  });
+  yearbookToolbar?.classList.toggle("is-hidden", activeMemoryTab !== "yearbook");
+  loadMemories();
+}
+
+function openMemoriesPanel(tab = "timeline") {
+  if (!memoriesPanel || !memoriesBackdrop) {
+    return;
+  }
+
+  closeDrawer();
+  closePeerProfile();
+  populateMemoryRecipients();
+  memoriesPanel.classList.remove("is-hidden");
+  memoriesBackdrop.classList.remove("is-hidden");
+  memoriesPanel.setAttribute("aria-hidden", "false");
+  switchMemoryTab(tab);
+}
+
+function closeMemoriesPanel() {
+  if (!memoriesPanel || !memoriesBackdrop) {
+    return;
+  }
+
+  memoriesPanel.classList.add("is-hidden");
+  memoriesBackdrop.classList.add("is-hidden");
+  memoriesPanel.setAttribute("aria-hidden", "true");
+}
+
+function decorateMemoryCard(card, memory) {
+  card.className = "memory-card";
+  card.classList.toggle("is-locked", Boolean(memory.locked));
+  card.classList.toggle("is-starred", Boolean(memory.starred || memory.itemType === "starred_message"));
+}
+
+function makeMemoryCard(memory) {
+  const card = document.createElement("article");
+  const top = document.createElement("div");
+  const badge = document.createElement("span");
+  const title = document.createElement("h3");
+  const meta = document.createElement("small");
+  const body = document.createElement("p");
+  const actionRow = document.createElement("div");
+
+  decorateMemoryCard(card, memory);
+  top.className = "memory-card-topline";
+  badge.className = "memory-badge";
+  body.className = "memory-body";
+  actionRow.className = "memory-card-actions";
+  badge.textContent = memoryTypeLabel(memory.itemType || memory.type);
+  title.textContent = memory.title || "Untitled memory";
+  meta.textContent = [
+    memoryPeerLabel(memory),
+    memory.locked && memory.unlockAt ? `opens ${formatShortDate(memory.unlockAt)}` : formatShortDate(memory.createdAt)
+  ].filter(Boolean).join(" • ");
+  body.textContent = memory.preview || memory.body || "No text yet.";
+
+  top.append(badge, meta);
+  card.append(top, title, body);
+
+  if (memory.locked) {
+    const openButton = document.createElement("button");
+    openButton.type = "button";
+    openButton.textContent = "Open if ready";
+    openButton.addEventListener("click", () => openMemory(memory.id));
+    actionRow.append(openButton);
+  }
+
+  if (memory.itemType !== "starred_message" && memory.prompt) {
+    const prompt = document.createElement("span");
+    prompt.className = "memory-prompt";
+    prompt.textContent = memory.prompt;
+    actionRow.prepend(prompt);
+  }
+
+  if (actionRow.childNodes.length) {
+    card.append(actionRow);
+  }
+
+  return card;
+}
+
+function renderMemoryList(items = [], emptyText = "No memories yet.") {
+  if (!memoryContent) {
+    return;
+  }
+
+  if (!items.length) {
+    memoryContent.replaceChildren(makeEmptyState(emptyText));
+    return;
+  }
+
+  memoryContent.replaceChildren(...items.map(makeMemoryCard));
+}
+
+function renderYearbook(data = {}) {
+  if (!memoryContent) {
+    return;
+  }
+
+  const wrapper = document.createElement("div");
+  const stats = document.createElement("div");
+  const months = data.months || [];
+  stats.className = "yearbook-stats";
+  stats.replaceChildren(
+    makeMonitorStat("moments", data.stats?.total || 0),
+    makeMonitorStat("letters", data.stats?.openWhenLetters || 0),
+    makeMonitorStat("capsules", data.stats?.timeCapsules || 0),
+    makeMonitorStat("saved", data.stats?.savedMessages || 0)
+  );
+  wrapper.className = "yearbook-view";
+  wrapper.append(stats);
+
+  if (!months.length) {
+    wrapper.append(makeEmptyState("No yearbook moments for this year yet."));
+    memoryContent.replaceChildren(wrapper);
+    return;
+  }
+
+  for (const month of months) {
+    const section = document.createElement("section");
+    const heading = document.createElement("h3");
+    heading.textContent = month.label;
+    section.className = "yearbook-month";
+    section.append(heading, ...month.items.map(makeMemoryCard));
+    wrapper.append(section);
+  }
+
+  memoryContent.replaceChildren(wrapper);
+}
+
+async function loadMemories() {
+  if (!currentUser || !memoryContent) {
+    return;
+  }
+
+  setMemoryStatus("Opening memories...", "neutral");
+
+  try {
+    if (activeMemoryTab === "yearbook") {
+      const year = yearbookYear?.value || new Date().getFullYear();
+      const response = await fetch(`/api/memories/yearbook?year=${encodeURIComponent(year)}`, { cache: "no-store" });
+      const result = await response.json();
+
+      if (!response.ok) {
+        setMemoryStatus(result.error || "Could not open yearbook.", "error");
+        return;
+      }
+
+      renderYearbook(result);
+      setMemoryStatus(`Yearbook ${result.year} opened.`, "success");
+      memoriesLoaded = true;
+      return;
+    }
+
+    const endpoint = activeMemoryTab === "timeline"
+      ? "/api/memories/timeline"
+      : `/api/memories?type=${encodeURIComponent(activeMemoryTab)}`;
+    const response = await fetch(endpoint, { cache: "no-store" });
+    const result = await response.json();
+
+    if (!response.ok) {
+      setMemoryStatus(result.error || "Could not open memories.", "error");
+      return;
+    }
+
+    renderMemoryList(result.timeline || result.memories || [], "No letters saved here yet.");
+    setMemoryStatus("Memories synced.", "success");
+    memoriesLoaded = true;
+  } catch {
+    setMemoryStatus("Network error while loading memories.", "error");
+  }
+}
+
+async function openMemory(id) {
+  if (!id) {
+    return;
+  }
+
+  setMemoryStatus("Opening sealed memory...", "neutral");
+
+  try {
+    const response = await fetch(`/api/memories/${encodeURIComponent(id)}/open`, {
+      method: "POST"
+    });
+    const result = await response.json();
+
+    if (!response.ok) {
+      setMemoryStatus(result.error || "Could not open memory.", "error");
+      return;
+    }
+
+    if (result.locked) {
+      setMemoryStatus("This memory is still sealed for later.", "neutral");
+      return;
+    }
+
+    setMemoryStatus("Memory opened.", "success");
+    await loadMemories();
+  } catch {
+    setMemoryStatus("Network error while opening memory.", "error");
+  }
+}
+
+async function createMemory(event) {
+  event.preventDefault();
+
+  if (!memoryPeer?.value) {
+    setMemoryStatus("Choose who this memory is with.", "error");
+    return;
+  }
+
+  const payload = {
+    type: memoryType.value,
+    peerUsername: memoryPeer.value,
+    title: memoryTitle.value.trim(),
+    prompt: memoryPrompt.value.trim(),
+    unlockAt: memoryUnlockAt.value ? new Date(memoryUnlockAt.value).toISOString() : "",
+    body: memoryBody.value.trim(),
+    starred: memoryStarred.checked
+  };
+
+  if (!payload.title || !payload.body) {
+    setMemoryStatus("Title and letter text are required.", "error");
+    return;
+  }
+
+  memorySaveButton.disabled = true;
+  setMemoryStatus("Saving memory...", "neutral");
+
+  try {
+    const response = await fetch("/api/memories", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const result = await response.json();
+
+    if (!response.ok) {
+      setMemoryStatus(result.error || "Could not save memory.", "error");
+      return;
+    }
+
+    memoryTitle.value = "";
+    memoryPrompt.value = "";
+    memoryUnlockAt.value = "";
+    memoryBody.value = "";
+    memoryStarred.checked = false;
+    setMemoryStatus("Saved to your private timeline.", "success");
+    await loadMemories();
+  } catch {
+    setMemoryStatus("Network error while saving memory.", "error");
+  } finally {
+    memorySaveButton.disabled = false;
+  }
+}
+
 async function markPopupRead(id) {
   if (!id) {
     return;
@@ -880,6 +1219,8 @@ function addSearchUserToChats(user) {
       unreadCount: 0
     });
   }
+
+  populateMemoryRecipients();
 }
 
 function renderUserSearchResult(user) {
@@ -1249,6 +1590,7 @@ async function loadRecipients() {
 
   recipients = result.recipients || [];
   populateNotificationRecipients();
+  populateMemoryRecipients();
 }
 
 async function loadChats() {
@@ -1663,6 +2005,9 @@ async function loadAll() {
       updatePeerHeader();
       messageList.replaceChildren(makeEmptyState("Tap a name or new text to open the full chat history."));
     }
+    if (memoriesLoaded && memoriesPanel && !memoriesPanel.classList.contains("is-hidden")) {
+      await loadMemories();
+    }
     setStatus("Synced.");
   } catch (error) {
     setStatus(error.message || "Could not load inbox.", "error");
@@ -1761,6 +2106,18 @@ function connectSocket() {
 
   socket.on("notification:batch", ({ notifications }) => {
     (notifications || []).forEach(showPopupNotification);
+  });
+
+  socket.on("memory:update", async ({ memory }) => {
+    if (memory && memory.createdBy !== currentUser.username) {
+      showSoftAlert(`${memory.kindLabel || "Memory"} added to your private timeline.`);
+    }
+
+    if (memoriesPanel && !memoriesPanel.classList.contains("is-hidden")) {
+      await loadMemories();
+    } else {
+      memoriesLoaded = false;
+    }
   });
 
   socket.on("watch:invite", ({ roomId, displayName }) => {
@@ -2091,6 +2448,15 @@ notificationForm?.addEventListener("submit", sendAdminNotification);
 backChatButton.addEventListener("click", closeConversation);
 viewProfileButton.addEventListener("click", openPeerProfile);
 watchTogetherButton.addEventListener("click", openWatchTogether);
+memoriesButton?.addEventListener("click", () => openMemoriesPanel("timeline"));
+drawerMemoriesButton?.addEventListener("click", () => openMemoriesPanel("timeline"));
+memoriesClose?.addEventListener("click", closeMemoriesPanel);
+memoriesBackdrop?.addEventListener("click", closeMemoriesPanel);
+memoryTabs.forEach((button) => {
+  button.addEventListener("click", () => switchMemoryTab(button.dataset.memoryTab));
+});
+memoryForm?.addEventListener("submit", createMemory);
+yearbookRefresh?.addEventListener("click", () => switchMemoryTab("yearbook"));
 watchInAppClose?.addEventListener("click", closeInAppWatch);
 peerProfileClose.addEventListener("click", closePeerProfile);
 peerProfileBackdrop.addEventListener("click", closePeerProfile);
@@ -2149,6 +2515,7 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     closeDrawer();
     closePeerProfile();
+    closeMemoriesPanel();
   }
 });
 document.addEventListener("visibilitychange", () => {
@@ -2168,4 +2535,7 @@ if ("serviceWorker" in navigator) {
 updateCounter();
 resizeChatTextarea();
 updateAttachmentName();
+if (yearbookYear) {
+  yearbookYear.value = String(new Date().getFullYear());
+}
 loadSession();

@@ -21,6 +21,7 @@ const builtInUsers = [
       "scrypt$16384$8$1$fd06d823fa97f8ca2e2d55dcc79c662c$2df4ac42f565eba4b4ea46892a31ff6c148b56af4080236e90d19e4bc14568bf12ce3556a488f1159741376d0b9b73c388eca129fc9dd3b7d1362b9642703f7b"
   }
 ];
+const memoryTypes = new Set(["memory", "open_when", "time_capsule"]);
 
 let writeQueue = Promise.resolve();
 let pool;
@@ -324,6 +325,9 @@ function normalizeStore(rawStore) {
     auditLogs: Array.isArray(rawStore.auditLogs) ? rawStore.auditLogs : [],
     restrictedSearchTerms: Array.isArray(rawStore.restrictedSearchTerms) ? rawStore.restrictedSearchTerms : [],
     backupHistory: Array.isArray(rawStore.backupHistory) ? rawStore.backupHistory.map(normalizeBackupRecord) : [],
+    memoryEntries: Array.isArray(rawStore.memoryEntries)
+      ? rawStore.memoryEntries.map(normalizeMemoryEntry)
+      : [],
     notificationAlerts: Array.isArray(rawStore.notificationAlerts)
       ? rawStore.notificationAlerts.map(normalizeNotification)
       : []
@@ -441,6 +445,29 @@ function normalizeNotification(row = {}) {
     expiresAt: row.expiresAt || row.expires_at || null,
     seen: Boolean(row.seen),
     sentBy: normalizeUsername(row.sentBy || row.sent_by || "")
+  };
+}
+
+function normalizeMemoryType(value) {
+  const type = String(value || "memory").trim().toLowerCase().replace(/[^a-z_]/g, "");
+  return memoryTypes.has(type) ? type : "memory";
+}
+
+function normalizeMemoryEntry(row = {}) {
+  return {
+    id: String(row.id || crypto.randomUUID()),
+    type: normalizeMemoryType(row.type),
+    ownerUsername: normalizeUsername(row.ownerUsername || row.owner_username),
+    peerUsername: normalizeUsername(row.peerUsername || row.peer_username),
+    createdBy: normalizeUsername(row.createdBy || row.created_by),
+    title: String(row.title || "Untitled memory").slice(0, 120),
+    body: String(row.body || "").slice(0, 2000),
+    prompt: String(row.prompt || "").slice(0, 160),
+    unlockAt: row.unlockAt || row.unlock_at || null,
+    openedAt: row.openedAt || row.opened_at || null,
+    starred: Boolean(row.starred),
+    createdAt: row.createdAt || row.created_at || new Date().toISOString(),
+    updatedAt: row.updatedAt || row.updated_at || row.createdAt || row.created_at || new Date().toISOString()
   };
 }
 
@@ -738,6 +765,40 @@ async function setupPostgresStore() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS memory_entries (
+      id UUID PRIMARY KEY,
+      type TEXT NOT NULL DEFAULT 'memory',
+      owner_username TEXT NOT NULL,
+      peer_username TEXT NOT NULL,
+      created_by TEXT NOT NULL,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      prompt TEXT NOT NULL DEFAULT '',
+      unlock_at TIMESTAMPTZ,
+      opened_at TIMESTAMPTZ,
+      starred BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+
+  await pool.query(`
+    ALTER TABLE memory_entries
+    ADD COLUMN IF NOT EXISTS type TEXT NOT NULL DEFAULT 'memory',
+    ADD COLUMN IF NOT EXISTS owner_username TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS peer_username TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS title TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS body TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS prompt TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS unlock_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS opened_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS starred BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS restricted_search_terms (
       id TEXT PRIMARY KEY DEFAULT md5(random()::text || clock_timestamp()::text),
       term TEXT NOT NULL UNIQUE,
@@ -857,6 +918,11 @@ async function setupPostgresStore() {
   );
   await pool.query("CREATE INDEX IF NOT EXISTS idx_notification_alerts_created ON notification_alerts (created_at DESC)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_notification_alerts_expires ON notification_alerts (expires_at)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_memory_entries_owner_created ON memory_entries (owner_username, created_at DESC)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_memory_entries_peer_created ON memory_entries (peer_username, created_at DESC)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_memory_entries_created_by ON memory_entries (created_by, created_at DESC)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_memory_entries_type_unlock ON memory_entries (type, unlock_at, created_at DESC)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_memory_entries_created ON memory_entries (created_at DESC)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_restricted_search_terms_term ON restricted_search_terms (term)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_backup_history_created ON backup_history (created_at DESC)");
 
@@ -871,6 +937,7 @@ async function setupPostgresStore() {
     await pool.query("VACUUM ANALYZE login_history");
     await pool.query("VACUUM ANALYZE admin_action_logs");
     await pool.query("VACUUM ANALYZE notification_alerts");
+    await pool.query("VACUUM ANALYZE memory_entries");
     await pool.query("VACUUM ANALYZE backup_history");
   } catch (error) {
     console.warn("Postgres VACUUM ANALYZE skipped.", error.message);
@@ -1243,6 +1310,18 @@ async function updateUserProfile(currentUsername, nextUsername, displayName) {
           "UPDATE messages SET sender_username = $1 WHERE sender_username = $2",
           [normalizedNextUsername, normalizedCurrentUsername]
         );
+        await client.query(
+          "UPDATE memory_entries SET owner_username = $1 WHERE owner_username = $2",
+          [normalizedNextUsername, normalizedCurrentUsername]
+        );
+        await client.query(
+          "UPDATE memory_entries SET peer_username = $1 WHERE peer_username = $2",
+          [normalizedNextUsername, normalizedCurrentUsername]
+        );
+        await client.query(
+          "UPDATE memory_entries SET created_by = $1 WHERE created_by = $2",
+          [normalizedNextUsername, normalizedCurrentUsername]
+        );
       }
 
       await client.query("COMMIT");
@@ -1280,6 +1359,18 @@ async function updateUserProfile(currentUsername, nextUsername, displayName) {
       }
       if (message.senderUsername === normalizedCurrentUsername) {
         message.senderUsername = normalizedNextUsername;
+      }
+    }
+
+    for (const entry of store.memoryEntries || []) {
+      if (entry.ownerUsername === normalizedCurrentUsername) {
+        entry.ownerUsername = normalizedNextUsername;
+      }
+      if (entry.peerUsername === normalizedCurrentUsername) {
+        entry.peerUsername = normalizedNextUsername;
+      }
+      if (entry.createdBy === normalizedCurrentUsername) {
+        entry.createdBy = normalizedNextUsername;
       }
     }
 
@@ -2403,6 +2494,373 @@ async function listStarredMessages(username, options = {}) {
   return messages.filter((message) => (message.starredBy || []).includes(owner)).slice(0, limit);
 }
 
+function memoryAccessClause(username) {
+  const owner = normalizeUsername(username);
+  return {
+    owner,
+    matches(entry) {
+      return (
+        entry.ownerUsername === owner ||
+        entry.peerUsername === owner ||
+        entry.createdBy === owner
+      );
+    }
+  };
+}
+
+function isMemoryLocked(entry) {
+  if (!entry || !entry.unlockAt) {
+    return false;
+  }
+
+  const unlockTime = new Date(entry.unlockAt).getTime();
+  return Number.isFinite(unlockTime) && unlockTime > Date.now();
+}
+
+async function createMemoryEntry({
+  type = "memory",
+  ownerUsername,
+  peerUsername,
+  createdBy,
+  title,
+  body,
+  prompt = "",
+  unlockAt = null,
+  starred = false
+}) {
+  const entry = normalizeMemoryEntry({
+    id: crypto.randomUUID(),
+    type,
+    ownerUsername,
+    peerUsername,
+    createdBy,
+    title,
+    body,
+    prompt,
+    unlockAt,
+    openedAt: null,
+    starred,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  });
+
+  if (!entry.ownerUsername || !entry.peerUsername || !entry.createdBy || !entry.title || !entry.body) {
+    return null;
+  }
+
+  if (usePostgres) {
+    await initStore();
+    const result = await pool.query(
+      `
+        INSERT INTO memory_entries (
+          id,
+          type,
+          owner_username,
+          peer_username,
+          created_by,
+          title,
+          body,
+          prompt,
+          unlock_at,
+          opened_at,
+          starred,
+          created_at,
+          updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        RETURNING
+          id,
+          type,
+          owner_username AS "ownerUsername",
+          peer_username AS "peerUsername",
+          created_by AS "createdBy",
+          title,
+          body,
+          prompt,
+          unlock_at AS "unlockAt",
+          opened_at AS "openedAt",
+          starred,
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+      `,
+      [
+        entry.id,
+        entry.type,
+        entry.ownerUsername,
+        entry.peerUsername,
+        entry.createdBy,
+        entry.title,
+        entry.body,
+        entry.prompt,
+        entry.unlockAt,
+        entry.openedAt,
+        entry.starred,
+        entry.createdAt,
+        entry.updatedAt
+      ]
+    );
+
+    return normalizeMemoryEntry(result.rows[0]);
+  }
+
+  return queuedWrite(async () => {
+    const store = await readJsonStore();
+    store.memoryEntries = [entry, ...(store.memoryEntries || [])].slice(0, 2000);
+    await writeJsonStore(store);
+    return entry;
+  });
+}
+
+async function listMemoryEntries(username, options = {}) {
+  const { owner } = memoryAccessClause(username);
+  const limit = clampLimit(options.limit, 80, 200);
+  const type = normalizeMemoryType(options.type || "");
+
+  if (!owner) {
+    return [];
+  }
+
+  if (usePostgres) {
+    await initStore();
+    const values = [owner];
+    const typeSql = options.type ? "AND type = $2" : "";
+
+    if (options.type) {
+      values.push(type);
+    }
+
+    values.push(limit);
+
+    const result = await pool.query(
+      `
+        SELECT
+          id,
+          type,
+          owner_username AS "ownerUsername",
+          peer_username AS "peerUsername",
+          created_by AS "createdBy",
+          title,
+          body,
+          prompt,
+          unlock_at AS "unlockAt",
+          opened_at AS "openedAt",
+          starred,
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+        FROM memory_entries
+        WHERE (owner_username = $1 OR peer_username = $1 OR created_by = $1)
+        ${typeSql}
+        ORDER BY created_at DESC
+        LIMIT $${values.length}
+      `,
+      values
+    );
+
+    return result.rows.map(normalizeMemoryEntry);
+  }
+
+  const store = await readJsonStore();
+  const access = memoryAccessClause(owner);
+  return (store.memoryEntries || [])
+    .map(normalizeMemoryEntry)
+    .filter((entry) => access.matches(entry))
+    .filter((entry) => !options.type || entry.type === type)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    .slice(0, limit);
+}
+
+async function openMemoryEntry(id, username) {
+  const memoryId = String(id || "").trim();
+  const { owner } = memoryAccessClause(username);
+
+  if (!memoryId || !owner) {
+    return null;
+  }
+
+  if (usePostgres) {
+    await initStore();
+    const existing = await pool.query(
+      `
+        SELECT
+          id,
+          type,
+          owner_username AS "ownerUsername",
+          peer_username AS "peerUsername",
+          created_by AS "createdBy",
+          title,
+          body,
+          prompt,
+          unlock_at AS "unlockAt",
+          opened_at AS "openedAt",
+          starred,
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+        FROM memory_entries
+        WHERE id = $1 AND (owner_username = $2 OR peer_username = $2 OR created_by = $2)
+        LIMIT 1
+      `,
+      [memoryId, owner]
+    );
+
+    if (!existing.rows[0]) {
+      return null;
+    }
+
+    const entry = normalizeMemoryEntry(existing.rows[0]);
+    if (isMemoryLocked(entry)) {
+      return { entry, locked: true };
+    }
+
+    if (entry.openedAt) {
+      return { entry, locked: false };
+    }
+
+    const openedAt = new Date().toISOString();
+    const updated = await pool.query(
+      `
+        UPDATE memory_entries
+        SET opened_at = $1, updated_at = $1
+        WHERE id = $2
+        RETURNING
+          id,
+          type,
+          owner_username AS "ownerUsername",
+          peer_username AS "peerUsername",
+          created_by AS "createdBy",
+          title,
+          body,
+          prompt,
+          unlock_at AS "unlockAt",
+          opened_at AS "openedAt",
+          starred,
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+      `,
+      [openedAt, memoryId]
+    );
+
+    return { entry: normalizeMemoryEntry(updated.rows[0]), locked: false };
+  }
+
+  return queuedWrite(async () => {
+    const store = await readJsonStore();
+    const entry = (store.memoryEntries || []).map(normalizeMemoryEntry).find((item) => {
+      const access = memoryAccessClause(owner);
+      return item.id === memoryId && access.matches(item);
+    });
+
+    if (!entry) {
+      return null;
+    }
+
+    if (isMemoryLocked(entry)) {
+      return { entry, locked: true };
+    }
+
+    const target = (store.memoryEntries || []).find((item) => String(item.id) === memoryId);
+    if (target && !target.openedAt) {
+      const openedAt = new Date().toISOString();
+      target.openedAt = openedAt;
+      target.updatedAt = openedAt;
+      entry.openedAt = openedAt;
+      entry.updatedAt = openedAt;
+      await writeJsonStore(store);
+    }
+
+    return { entry, locked: false };
+  });
+}
+
+async function listMemoryTimeline(username, options = {}) {
+  const owner = normalizeUsername(username);
+  const limit = clampLimit(options.limit, 120, 300);
+  const [entries, starredMessages] = await Promise.all([
+    listMemoryEntries(owner, { limit }),
+    listStarredMessages(owner, { limit })
+  ]);
+
+  const memoryItems = entries.map((entry) => ({
+    itemType: entry.type,
+    id: entry.id,
+    title: entry.title,
+    body: entry.body,
+    prompt: entry.prompt,
+    ownerUsername: entry.ownerUsername,
+    peerUsername: entry.peerUsername,
+    createdBy: entry.createdBy,
+    unlockAt: entry.unlockAt,
+    openedAt: entry.openedAt,
+    starred: entry.starred,
+    locked: isMemoryLocked(entry),
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt
+  }));
+  const starredItems = starredMessages.map((message) => ({
+    itemType: "starred_message",
+    id: message.id,
+    title: message.senderUsername === owner ? "A message you saved" : `Saved from ${message.senderName || "Someone"}`,
+    body: message.text || (message.attachment ? message.attachment.name || "Saved attachment" : "Saved message"),
+    prompt: "",
+    ownerUsername: owner,
+    peerUsername: message.senderUsername === owner ? message.recipientUsername : message.senderUsername,
+    createdBy: message.senderUsername || message.recipientUsername,
+    unlockAt: null,
+    openedAt: message.readAt,
+    starred: true,
+    locked: false,
+    createdAt: message.createdAt,
+    updatedAt: message.createdAt
+  }));
+
+  return [...memoryItems, ...starredItems]
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    .slice(0, limit);
+}
+
+async function getPrivateYearbook(username, options = {}) {
+  const rawYear = Number(options.year);
+  const year = Number.isInteger(rawYear) && rawYear >= 2000 && rawYear <= 2100
+    ? rawYear
+    : new Date().getFullYear();
+  const timeline = await listMemoryTimeline(username, { limit: 300 });
+  const months = Array.from({ length: 12 }, (_, index) => ({
+    month: index,
+    label: new Intl.DateTimeFormat("en", { month: "long" }).format(new Date(Date.UTC(year, index, 1))),
+    items: []
+  }));
+  const stats = {
+    total: 0,
+    savedMessages: 0,
+    memories: 0,
+    openWhenLetters: 0,
+    timeCapsules: 0,
+    locked: 0,
+    opened: 0
+  };
+
+  for (const item of timeline) {
+    const created = new Date(item.createdAt);
+    if (Number.isNaN(created.getTime()) || created.getFullYear() !== year) {
+      continue;
+    }
+
+    stats.total += 1;
+    if (item.itemType === "starred_message") stats.savedMessages += 1;
+    if (item.itemType === "memory") stats.memories += 1;
+    if (item.itemType === "open_when") stats.openWhenLetters += 1;
+    if (item.itemType === "time_capsule") stats.timeCapsules += 1;
+    if (item.locked) stats.locked += 1;
+    if (item.openedAt) stats.opened += 1;
+    months[created.getMonth()].items.push(item);
+  }
+
+  return {
+    year,
+    stats,
+    months: months.filter((month) => month.items.length)
+  };
+}
+
 async function deleteMessage(id, username) {
   const owner = normalizeUsername(username);
 
@@ -2509,6 +2967,7 @@ async function getStorageSummary() {
       "inbox_users",
       "messages",
       "notification_alerts",
+      "memory_entries",
       "audit_logs",
       "admin_action_logs",
       "login_history",
@@ -2528,6 +2987,7 @@ async function getStorageSummary() {
                 WHEN 'inbox_users' THEN (SELECT COUNT(*) FROM inbox_users)
                 WHEN 'messages' THEN (SELECT COUNT(*) FROM messages)
                 WHEN 'notification_alerts' THEN (SELECT COUNT(*) FROM notification_alerts)
+                WHEN 'memory_entries' THEN (SELECT COUNT(*) FROM memory_entries)
                 WHEN 'audit_logs' THEN (SELECT COUNT(*) FROM audit_logs)
                 WHEN 'admin_action_logs' THEN (SELECT COUNT(*) FROM admin_action_logs)
                 WHEN 'login_history' THEN (SELECT COUNT(*) FROM login_history)
@@ -2575,6 +3035,7 @@ async function getStorageSummary() {
         totalUsers: tables.find((table) => table.name === "inbox_users")?.rows || 0,
         totalMessages: tables.find((table) => table.name === "messages")?.rows || 0,
         totalNotifications: tables.find((table) => table.name === "notification_alerts")?.rows || 0,
+        totalMemories: tables.find((table) => table.name === "memory_entries")?.rows || 0,
         auditLogRows: tables.find((table) => table.name === "audit_logs")?.rows || 0,
         dbStoredMediaCount: Number(mediaRow.db_media_count || 0),
         urlMediaCount: Number(mediaRow.url_media_count || 0)
@@ -2602,6 +3063,7 @@ async function getStorageSummary() {
     { name: "inbox_users", rows: store.users.length, bytes: 0 },
     { name: "messages", rows: store.messages.length, bytes: 0 },
     { name: "notification_alerts", rows: (store.notificationAlerts || []).length, bytes: 0 },
+    { name: "memory_entries", rows: (store.memoryEntries || []).length, bytes: 0 },
     { name: "audit_logs", rows: (store.auditLogs || []).length, bytes: 0 },
     { name: "admin_action_logs", rows: (store.adminActionLogs || []).length, bytes: 0 },
     { name: "login_history", rows: (store.loginHistory || []).length, bytes: 0 },
@@ -2619,6 +3081,7 @@ async function getStorageSummary() {
       totalUsers: store.users.length,
       totalMessages: store.messages.length,
       totalNotifications: (store.notificationAlerts || []).length,
+      totalMemories: (store.memoryEntries || []).length,
       auditLogRows: (store.auditLogs || []).length,
       dbStoredMediaCount,
       urlMediaCount
@@ -2764,6 +3227,7 @@ async function createBackupExport({ createdBy = "", appVersion = "" } = {}) {
       adminActionsResult,
       auditResult,
       restrictedTermsResult,
+      memoryEntriesResult,
       backupHistoryResult
     ] = await Promise.all([
       pool.query(`
@@ -2889,6 +3353,24 @@ async function createBackupExport({ createdBy = "", appVersion = "" } = {}) {
         ORDER BY term ASC
       `),
       pool.query(`
+        SELECT
+          id,
+          type,
+          owner_username AS "ownerUsername",
+          peer_username AS "peerUsername",
+          created_by AS "createdBy",
+          title,
+          body,
+          prompt,
+          unlock_at AS "unlockAt",
+          opened_at AS "openedAt",
+          starred,
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+        FROM memory_entries
+        ORDER BY created_at ASC
+      `),
+      pool.query(`
         SELECT id, created_at AS "createdAt", created_by AS "createdBy", status,
           storage_mode AS "storageMode", file_name AS "fileName", file_path AS "filePath",
           download_url AS "downloadUrl", cloudinary_public_id AS "cloudinaryPublicId",
@@ -2908,6 +3390,7 @@ async function createBackupExport({ createdBy = "", appVersion = "" } = {}) {
       adminActionLogs: adminActionsResult.rows.map(normalizeAdminAction),
       importantAuditLogs: auditResult.rows,
       restrictedSearchTerms: restrictedTermsResult.rows,
+      memoryEntries: memoryEntriesResult.rows.map(normalizeMemoryEntry),
       backupHistory: backupHistoryResult.rows.map(normalizeBackupRecord)
     };
     const mediaManifest = createMediaManifest(data);
@@ -2920,6 +3403,7 @@ async function createBackupExport({ createdBy = "", appVersion = "" } = {}) {
       admin_action_logs: data.adminActionLogs.length,
       important_audit_logs: data.importantAuditLogs.length,
       restricted_search_terms: data.restrictedSearchTerms.length,
+      memory_entries: data.memoryEntries.length,
       backup_history: data.backupHistory.length,
       media_manifest: mediaManifest.length
     };
@@ -2947,6 +3431,7 @@ async function createBackupExport({ createdBy = "", appVersion = "" } = {}) {
       .filter((item) => String(item.action || "").toUpperCase() === "DELETE" || !["messages", "media", "message_media", "attachments"].includes(String(item.tableName || item.table_name || "")))
       .slice(-1000),
     restrictedSearchTerms: store.restrictedSearchTerms || [],
+    memoryEntries: (store.memoryEntries || []).map(normalizeMemoryEntry),
     backupHistory: store.backupHistory || []
   };
   const mediaManifest = createMediaManifest(data);
@@ -2959,6 +3444,7 @@ async function createBackupExport({ createdBy = "", appVersion = "" } = {}) {
     admin_action_logs: data.adminActionLogs.length,
     important_audit_logs: data.importantAuditLogs.length,
     restricted_search_terms: data.restrictedSearchTerms.length,
+    memory_entries: data.memoryEntries.length,
     backup_history: data.backupHistory.length,
     media_manifest: mediaManifest.length
   };
@@ -4323,6 +4809,7 @@ module.exports = {
   cleanupAnalyticsLogs,
   closeStore,
   createBackupExport,
+  createMemoryEntry,
   createNotificationAlert,
   deleteMessage,
   deleteNotificationAlert,
@@ -4334,6 +4821,7 @@ module.exports = {
   getStorageSummary,
   getUserAvatar,
   getUltimateAdminMonitoring,
+  getPrivateYearbook,
   initStore,
   isRestrictedSearchTerm,
   listBackupHistory,
@@ -4343,6 +4831,8 @@ module.exports = {
   listAdminActionLogs,
   listLetterMessages,
   listMessagesForUser,
+  listMemoryEntries,
+  listMemoryTimeline,
   listNotificationsForUser,
   listStarredMessages,
   listUserLoginHistory,
@@ -4352,6 +4842,7 @@ module.exports = {
   markNotificationsRead,
   markStaleUsersOffline,
   normalizeUsername,
+  openMemoryEntry,
   heartbeatUserSession,
   recordLoginAttempt,
   recordBackupMetadata,
