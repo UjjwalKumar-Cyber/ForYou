@@ -81,7 +81,9 @@ const io = new Server(httpServer, {
 const PORT = Number(process.env.PORT || 3000);
 const SECRET_PATH = "/secret-8392-love-note";
 const SECRET_PAGE_ENABLED = process.env.ENABLE_SECRET_PAGE === "true";
-const SERVICE_DISCONTINUED = process.env.SERVICE_DISCONTINUED === "true";
+const SERVICE_DISCONTINUED =
+  process.env.SERVICE_DISCONTINUED === "true" &&
+  process.env.ENABLE_DISCONTINUED_MODE === "true";
 const isProduction = process.env.NODE_ENV === "production";
 const ACTIVE_WINDOW_MS = 1000 * 60 * 2;
 const ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;

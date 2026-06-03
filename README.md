@@ -86,6 +86,7 @@ Edit `.env`:
 
 ```bash
 SERVICE_DISCONTINUED=false
+ENABLE_DISCONTINUED_MODE=false
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=your-admin-password
 SESSION_SECRET=generate-a-long-random-string
@@ -98,11 +99,12 @@ The project is currently set to live mode with:
 
 ```bash
 SERVICE_DISCONTINUED=false
+ENABLE_DISCONTINUED_MODE=false
 ```
 
 In live mode, `/admin`, `/profile`, chats, admin tools, and `/watch-together`
 are available. To temporarily show only the discontinued notice later, set
-`SERVICE_DISCONTINUED=true` and redeploy.
+both `SERVICE_DISCONTINUED=true` and `ENABLE_DISCONTINUED_MODE=true`, then redeploy.
 
 Generate a session secret:
 
