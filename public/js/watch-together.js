@@ -116,18 +116,29 @@
         width: "100%",
         videoId,
         playerVars: {
+          enablejsapi: 1,
           playsinline: 1,
           rel: 0,
-          origin: window.location.origin
+          origin: window.location.origin,
+          widget_referrer: window.location.origin
         },
         events: {
           onReady: () => {
             playerReady = true;
+            const iframe = player.getIframe && player.getIframe();
+            if (iframe) {
+              iframe.referrerPolicy = "strict-origin-when-cross-origin";
+              iframe.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
+              iframe.allowFullscreen = true;
+            }
             resolve();
           },
           onStateChange: handlePlayerStateChange,
-          onError: () => {
-            syncStatus.textContent = "This video cannot be played in an embedded room.";
+          onError: (event) => {
+            const code = event && event.data;
+            syncStatus.textContent = code === 153
+              ? "YouTube needs this page to send its site origin. Refresh once after the update, or open this video on YouTube."
+              : "This video cannot be played in an embedded room.";
           }
         }
       });

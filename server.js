@@ -249,7 +249,7 @@ app.use(
     },
     crossOriginEmbedderPolicy: false,
     referrerPolicy: {
-      policy: "no-referrer"
+      policy: "strict-origin-when-cross-origin"
     }
   })
 );

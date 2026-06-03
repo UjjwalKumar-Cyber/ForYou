@@ -353,7 +353,7 @@ function openWatchTogether() {
     return;
   }
 
-  window.open(`/watch/${encodeURIComponent(roomId)}`, "_blank", "noopener,noreferrer");
+  window.open(`/watch/${encodeURIComponent(roomId)}`, "_blank", "noopener");
 }
 
 function openPeerProfile() {
