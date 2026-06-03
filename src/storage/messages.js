@@ -474,6 +474,13 @@ async function setupPostgresStore() {
 
   await pool.query(`
     ALTER TABLE inbox_users
+    ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS password_hash TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  `);
+
+  await pool.query(`
+    ALTER TABLE inbox_users
     ADD COLUMN IF NOT EXISTS bio TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS email TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT false,
@@ -509,6 +516,12 @@ async function setupPostgresStore() {
       text TEXT NOT NULL CHECK (char_length(text) <= 500),
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )
+  `);
+
+  await pool.query(`
+    ALTER TABLE messages
+    ADD COLUMN IF NOT EXISTS text TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now()
   `);
 
   await pool.query(`
