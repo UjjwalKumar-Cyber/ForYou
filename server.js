@@ -194,12 +194,16 @@ const MESSAGE_PAGE_PASSWORD = SECRET_PAGE_ENABLED && !SERVICE_DISCONTINUED
   : "";
 const ADMIN_PASSWORD = SERVICE_DISCONTINUED
   ? process.env.ADMIN_PASSWORD || ""
-  : requiredSecret("ADMIN_PASSWORD", "admin-love-notes");
+  : process.env.ADMIN_PASSWORD || (isProduction ? "" : requiredSecret("ADMIN_PASSWORD", "admin-love-notes"));
 const SESSION_SECRET = SERVICE_DISCONTINUED
   ? process.env.SESSION_SECRET || "discontinued-service-session-secret"
   : requiredSecret("SESSION_SECRET", "local-development-session-secret-change-me");
 
 process.env.ADMIN_PASSWORD = ADMIN_PASSWORD;
+
+if (!SERVICE_DISCONTINUED && isProduction && !ADMIN_PASSWORD) {
+  console.warn("ADMIN_PASSWORD is not set. Ultimate admin seeding is skipped.");
+}
 
 const activeUsers = new Map();
 const watchRooms = new Map();
