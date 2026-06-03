@@ -2855,45 +2855,46 @@ if (SERVICE_DISCONTINUED) {
 } else {
   initStore()
     .then(() => {
-    subscribeNotificationAlerts(async ({ id }) => {
-      const notification = await findNotificationAlert(id);
-      if (notification) {
-        emitNotificationAlert(notification);
-        scheduleAdminMonitoringUpdate();
-      }
-    }).catch((error) => {
-      console.error("Notification listener failed.", error);
-    });
-
-    setInterval(() => {
-      cleanupExpiredMessages().catch((error) => {
-        console.error("Expired message cleanup failed.", error);
-      });
-      cleanupAnalyticsLogs().catch((error) => {
-        console.error("Analytics cleanup failed.", error);
-      });
-      cleanupExpiredNotifications().catch((error) => {
-        console.error("Notification cleanup failed.", error);
-      });
-    }, 60 * 60 * 1000);
-
-    setInterval(() => {
-      markStaleUsersOffline()
-        .then(() => {
-          invalidateUserCache();
-          schedulePresenceUpdate();
+      subscribeNotificationAlerts(async ({ id }) => {
+        const notification = await findNotificationAlert(id);
+        if (notification) {
+          emitNotificationAlert(notification);
           scheduleAdminMonitoringUpdate();
-        })
-        .catch((error) => {
-          console.error("Stale presence cleanup failed.", error);
-        });
-    }, 60 * 1000);
+        }
+      }).catch((error) => {
+        console.error("Notification listener failed.", error);
+      });
 
-    startHttpServer();
+      setInterval(() => {
+        cleanupExpiredMessages().catch((error) => {
+          console.error("Expired message cleanup failed.", error);
+        });
+        cleanupAnalyticsLogs().catch((error) => {
+          console.error("Analytics cleanup failed.", error);
+        });
+        cleanupExpiredNotifications().catch((error) => {
+          console.error("Notification cleanup failed.", error);
+        });
+      }, 60 * 60 * 1000);
+
+      setInterval(() => {
+        markStaleUsersOffline()
+          .then(() => {
+            invalidateUserCache();
+            schedulePresenceUpdate();
+            scheduleAdminMonitoringUpdate();
+          })
+          .catch((error) => {
+            console.error("Stale presence cleanup failed.", error);
+          });
+      }, 60 * 1000);
+
+      startHttpServer();
     })
     .catch((error) => {
       console.error("Could not initialize message storage.");
       console.error(error);
-      process.exit(1);
+      console.error("Starting limited web mode so Watch Together can stay online.");
+      startHttpServer();
     });
 }
