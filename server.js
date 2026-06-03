@@ -308,9 +308,15 @@ if (SERVICE_DISCONTINUED) {
   });
 }
 
-const PgSession = !SERVICE_DISCONTINUED && process.env.DATABASE_URL
-  ? require("connect-pg-simple")(session)
-  : null;
+let PgSession = null;
+
+if (!SERVICE_DISCONTINUED && process.env.DATABASE_URL) {
+  try {
+    PgSession = require("connect-pg-simple")(session);
+  } catch (error) {
+    console.warn("Postgres session store is unavailable. Falling back to MemoryStore.", error.message);
+  }
+}
 
 const sessionStore = PgSession
   ? new PgSession({
