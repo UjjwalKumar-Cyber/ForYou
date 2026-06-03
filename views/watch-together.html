@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="robots" content="noindex, nofollow, noarchive">
     <title>Watch Together - ForyoU</title>
-    <link rel="stylesheet" href="/css/styles.css?v=20260603-youtube153">
+    <link rel="stylesheet" href="/css/styles.css?v=20260603-watchv2">
     <script src="/socket.io/socket.io.js" defer></script>
-    <script src="/js/watch-together.js?v=20260603-youtube153" defer></script>
+    <script src="/js/watch-together.js?v=20260603-watchv2" defer></script>
   </head>
   <body class="watch-body">
     <main class="watch-shell">
@@ -43,19 +43,22 @@
       <section class="watch-card" aria-label="Video controls">
         <form class="watch-video-form" id="watch-video-form">
           <label>
-            Video or reel link
-            <input
+            Video links
+            <textarea
+              class="watch-link-box"
               id="watch-url"
-              type="text"
-              placeholder="Paste YouTube, YouTube Shorts, or Instagram Reel link"
-              autocomplete="off"
-            >
+              rows="3"
+              placeholder="Paste one or more YouTube links. Use a new line for each video."
+              autocomplete="off"></textarea>
           </label>
-          <button class="button primary-button" type="submit">Start watching</button>
+          <div class="watch-form-actions">
+            <button class="button primary-button" type="submit">Start playlist</button>
+            <button class="button secondary-button" id="add-watch-videos" type="button">Add videos</button>
+          </div>
         </form>
         <p class="watch-help">
-          YouTube and Shorts sync play, pause, and seek. Instagram Reels can open in the room,
-          but exact playback sync depends on Instagram.
+          YouTube and Shorts sync play, pause, seek, and playlist changes. Videos stream from YouTube,
+          so ForyoU only keeps lightweight room metadata in memory.
         </p>
       </section>
 
@@ -83,6 +86,34 @@
           </div>
           <button class="button primary-button compact-button" id="sync-now" type="button">Sync now</button>
         </div>
+      </section>
+
+      <section class="watch-grid">
+        <section class="watch-card watch-playlist-card" aria-label="Playlist">
+          <div class="watch-section-topline">
+            <div>
+              <p class="watch-kicker">Playlist</p>
+              <h2>Queue</h2>
+            </div>
+            <div class="watch-mini-actions">
+              <button class="button secondary-button compact-button" id="save-watch-playlist" type="button">Save</button>
+              <button class="button secondary-button compact-button" id="load-watch-playlist" type="button">Load</button>
+            </div>
+          </div>
+          <div class="watch-playlist" id="watch-playlist"></div>
+        </section>
+
+        <section class="watch-card watch-chat-card" aria-label="Watch chat">
+          <div>
+            <p class="watch-kicker">Live chat</p>
+            <h2>Room chat</h2>
+          </div>
+          <div class="watch-chat-list" id="watch-chat-list"></div>
+          <form class="watch-chat-form" id="watch-chat-form">
+            <input id="watch-chat-input" maxlength="300" placeholder="Write while watching">
+            <button class="button primary-button compact-button" type="submit">Send</button>
+          </form>
+        </section>
       </section>
 
       <section class="watch-card watch-footer-card" aria-label="Room people and reactions">

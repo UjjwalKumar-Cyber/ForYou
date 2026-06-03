@@ -49,6 +49,10 @@ const peerProfileName = document.querySelector("#peer-profile-name");
 const peerProfileStatus = document.querySelector("#peer-profile-status");
 const peerProfileUsername = document.querySelector("#peer-profile-username");
 const peerProfileBio = document.querySelector("#peer-profile-bio");
+const watchInAppPanel = document.querySelector("#watch-in-app-panel");
+const watchInAppFrame = document.querySelector("#watch-in-app-frame");
+const watchInAppClose = document.querySelector("#watch-in-app-close");
+const watchInAppTitle = document.querySelector("#watch-in-app-title");
 const ultimateAdminPanel = document.querySelector("#ultimate-admin-panel");
 const monitorStats = document.querySelector("#monitor-stats");
 const monitorUserList = document.querySelector("#monitor-user-list");
@@ -345,15 +349,53 @@ function conversationWatchRoomId() {
   return `FORYOU-${watchRoomHash(pairKey)}`;
 }
 
+function openInAppWatch(roomId, label = "Private room") {
+  if (!roomId) {
+    showSoftAlert("Open a chat first, then start Watch Together.");
+    return;
+  }
+
+  const displayName = currentUser ? currentUser.displayName || currentUser.username || "Me" : "Me";
+  const roomPath = `/watch/${encodeURIComponent(roomId)}?embed=1&name=${encodeURIComponent(displayName)}`;
+
+  if (!watchInAppPanel || !watchInAppFrame || !watchInAppTitle) {
+    window.open(roomPath, "_blank", "noopener");
+    return;
+  }
+
+  watchInAppTitle.textContent = label;
+  watchInAppFrame.src = roomPath;
+  watchInAppPanel.classList.remove("is-hidden");
+  watchInAppPanel.setAttribute("aria-hidden", "false");
+}
+
+function closeInAppWatch() {
+  if (!watchInAppPanel || !watchInAppFrame) {
+    return;
+  }
+
+  watchInAppPanel.classList.add("is-hidden");
+  watchInAppPanel.setAttribute("aria-hidden", "true");
+  watchInAppFrame.src = "";
+}
+
 function openWatchTogether() {
   const roomId = conversationWatchRoomId();
+  const peer = currentPeerProfile();
 
   if (!roomId) {
     showSoftAlert("Open a chat first, then start Watch Together.");
     return;
   }
 
-  window.open(`/watch/${encodeURIComponent(roomId)}`, "_blank", "noopener");
+  openInAppWatch(roomId, peer ? `With ${peer.displayName || peer.username}` : "Private room");
+
+  if (socket && currentPeer && currentPeer !== "__letters__") {
+    socket.emit("watch:invite", {
+      recipientUsername: currentPeer,
+      roomId
+    });
+  }
 }
 
 function openPeerProfile() {
@@ -1688,6 +1730,15 @@ function connectSocket() {
     (notifications || []).forEach(showPopupNotification);
   });
 
+  socket.on("watch:invite", ({ roomId, displayName }) => {
+    showSoftAlert(`${displayName || "Someone"} invited you to Watch Together.`);
+    openInAppWatch(roomId, displayName ? `With ${displayName}` : "Private room");
+  });
+
+  socket.on("watch:invite:sent", () => {
+    showSoftAlert("Watch Together invite sent.");
+  });
+
   socket.on("account:security", ({ message }) => {
     setLoginMessage(message || "Your account status changed. Please log in again.", "error");
     currentUser = null;
@@ -1728,6 +1779,11 @@ function upsertConversationFromMessage(message) {
 }
 
 function showSoftAlert(message) {
+  if (typeof message === "string") {
+    setStatus(message);
+    return;
+  }
+
   setStatus(`New text from ${message.senderName || "Someone"}.`);
 }
 
@@ -2001,6 +2057,7 @@ notificationForm?.addEventListener("submit", sendAdminNotification);
 backChatButton.addEventListener("click", closeConversation);
 viewProfileButton.addEventListener("click", openPeerProfile);
 watchTogetherButton.addEventListener("click", openWatchTogether);
+watchInAppClose?.addEventListener("click", closeInAppWatch);
 peerProfileClose.addEventListener("click", closePeerProfile);
 peerProfileBackdrop.addEventListener("click", closePeerProfile);
 menuButton.addEventListener("click", openDrawer);

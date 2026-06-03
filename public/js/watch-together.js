@@ -5,6 +5,13 @@
   const statusText = document.querySelector("#watch-status");
   const videoForm = document.querySelector("#watch-video-form");
   const videoInput = document.querySelector("#watch-url");
+  const addWatchVideosButton = document.querySelector("#add-watch-videos");
+  const playlistElement = document.querySelector("#watch-playlist");
+  const savePlaylistButton = document.querySelector("#save-watch-playlist");
+  const loadPlaylistButton = document.querySelector("#load-watch-playlist");
+  const chatList = document.querySelector("#watch-chat-list");
+  const chatForm = document.querySelector("#watch-chat-form");
+  const chatInput = document.querySelector("#watch-chat-input");
   const youtubeElement = document.querySelector("#youtube-player");
   const instagramFrame = document.querySelector("#instagram-player");
   const emptyState = document.querySelector("#watch-empty");
@@ -23,6 +30,8 @@
   let suppressPlayerEventsUntil = 0;
   let lastKnownTime = 0;
   let lastLoadedVideoId = "";
+  let viewerKey = "";
+  let draggedPlaylistIndex = -1;
 
   function setStatus(message, type = "neutral") {
     statusText.textContent = message;
@@ -43,6 +52,17 @@
 
   function getDisplayName() {
     return String(nameInput.value || "").trim().slice(0, 28) || "Someone";
+  }
+
+  function getViewerKey() {
+    let value = window.localStorage.getItem("foryou_watch_viewer_key") || "";
+
+    if (!/^[a-zA-Z0-9_-]{8,48}$/.test(value)) {
+      value = makeRoomId() + makeRoomId();
+      window.localStorage.setItem("foryou_watch_viewer_key", value);
+    }
+
+    return value;
   }
 
   function roomUrl() {
@@ -78,6 +98,109 @@
         return item;
       })
     );
+  }
+
+  function sourceLabel(source, index) {
+    if (!source) {
+      return `Video ${index + 1}`;
+    }
+
+    if (source.provider === "youtube") {
+      return `YouTube ${source.videoId}`;
+    }
+
+    if (source.provider === "instagram") {
+      return `Instagram ${source.shortcode}`;
+    }
+
+    return `Video ${index + 1}`;
+  }
+
+  function renderPlaylist() {
+    const playlist = latestState && Array.isArray(latestState.playlist) ? latestState.playlist : [];
+    const currentIndex = latestState ? Number(latestState.currentIndex) || 0 : 0;
+
+    if (!playlist.length) {
+      playlistElement.replaceChildren();
+      playlistElement.textContent = "No videos yet. Paste links above to start a shared queue.";
+      return;
+    }
+
+    playlistElement.replaceChildren(
+      ...playlist.map((source, index) => {
+        const item = document.createElement("article");
+        const title = document.createElement("button");
+        const actions = document.createElement("div");
+        const remove = document.createElement("button");
+
+        item.className = "watch-playlist-item";
+        item.classList.toggle("is-current", index === currentIndex);
+        item.draggable = true;
+        item.dataset.index = String(index);
+
+        title.type = "button";
+        title.className = "watch-playlist-title";
+        title.textContent = sourceLabel(source, index);
+        title.addEventListener("click", () => {
+          socket.emit("watch:playlist:select", { index });
+        });
+
+        actions.className = "watch-playlist-actions";
+        remove.type = "button";
+        remove.textContent = "Remove";
+        remove.addEventListener("click", () => {
+          socket.emit("watch:playlist:remove", { index });
+        });
+
+        item.addEventListener("dragstart", () => {
+          draggedPlaylistIndex = index;
+          item.classList.add("is-dragging");
+        });
+        item.addEventListener("dragend", () => {
+          draggedPlaylistIndex = -1;
+          item.classList.remove("is-dragging");
+        });
+        item.addEventListener("dragover", (event) => {
+          event.preventDefault();
+        });
+        item.addEventListener("drop", (event) => {
+          event.preventDefault();
+          if (draggedPlaylistIndex >= 0 && draggedPlaylistIndex !== index) {
+            socket.emit("watch:playlist:reorder", {
+              from: draggedPlaylistIndex,
+              to: index
+            });
+          }
+        });
+
+        actions.append(remove);
+        item.append(title, actions);
+        return item;
+      })
+    );
+  }
+
+  function renderChat(messages = []) {
+    if (!messages.length) {
+      chatList.replaceChildren();
+      chatList.textContent = "No room messages yet.";
+      return;
+    }
+
+    chatList.replaceChildren(
+      ...messages.map((message) => {
+        const item = document.createElement("article");
+        const sender = document.createElement("strong");
+        const text = document.createElement("p");
+
+        item.className = "watch-chat-message";
+        sender.textContent = message.displayName || "Someone";
+        text.textContent = message.text || "";
+        item.append(sender, text);
+        return item;
+      })
+    );
+    chatList.scrollTop = chatList.scrollHeight;
   }
 
   function loadYoutubeApi() {
@@ -185,7 +308,7 @@
     }
 
     if (event.data === window.YT.PlayerState.ENDED) {
-      emitControl("pause");
+      socket.emit("watch:playlist:next", { autoplay: true });
     }
   }
 
@@ -246,6 +369,8 @@
   async function applyState(state, reason = "sync") {
     latestState = state;
     renderViewers(state.viewers || []);
+    renderPlaylist();
+    renderChat(state.chatMessages || []);
 
     if (!state.source) {
       renderEmpty();
@@ -277,14 +402,15 @@
     setStatus("Joining room...", "neutral");
     socket.emit("watch:join", {
       roomId,
-      displayName: getDisplayName()
+      displayName: getDisplayName(),
+      viewerKey
     }, async (result = {}) => {
       if (!result.ok) {
         setStatus(result.error || "Could not join room.", "error");
         return;
       }
 
-      setStatus("Room ready. Share the link with her.", "success");
+      setStatus("Room ready.", "success");
       await applyState(result.state || {});
     });
   }
@@ -317,6 +443,15 @@
       renderViewers(viewers || []);
     });
 
+    socket.on("watch:chat", ({ message }) => {
+      if (!latestState) {
+        latestState = {};
+      }
+
+      latestState.chatMessages = [...(latestState.chatMessages || []), message].slice(-100);
+      renderChat(latestState.chatMessages);
+    });
+
     socket.on("watch:reaction", ({ reaction, displayName }) => {
       const label = reaction === "heart"
         ? "sent a heart"
@@ -330,22 +465,88 @@
   videoForm.addEventListener("submit", (event) => {
     event.preventDefault();
 
-    const url = videoInput.value.trim();
-    if (!url) {
+    const urls = videoInput.value.trim();
+    if (!urls) {
       setStatus("Paste a video link first.", "error");
       return;
     }
 
-    setStatus("Loading video...", "neutral");
-    socket.emit("watch:load", { url }, (result = {}) => {
+    setStatus("Loading playlist...", "neutral");
+    socket.emit("watch:load", { urls }, (result = {}) => {
       if (!result.ok) {
         setStatus(result.error || "Could not load this link.", "error");
         return;
       }
 
-      setStatus("Video loaded for both of you.", "success");
+      setStatus("Playlist loaded for both of you.", "success");
       videoInput.value = "";
     });
+  });
+
+  addWatchVideosButton.addEventListener("click", () => {
+    const urls = videoInput.value.trim();
+    if (!urls) {
+      setStatus("Paste links to add first.", "error");
+      return;
+    }
+
+    socket.emit("watch:playlist:add", { urls }, (result = {}) => {
+      if (!result.ok) {
+        setStatus(result.error || "Could not add videos.", "error");
+        return;
+      }
+
+      setStatus("Videos added to the shared queue.", "success");
+      videoInput.value = "";
+    });
+  });
+
+  savePlaylistButton.addEventListener("click", () => {
+    const playlist = latestState && Array.isArray(latestState.playlist) ? latestState.playlist : [];
+    if (!playlist.length) {
+      setStatus("Add videos before saving.", "error");
+      return;
+    }
+
+    window.localStorage.setItem("foryou_saved_watch_playlist", JSON.stringify(playlist.map((item) => item.originalUrl)));
+    setStatus("Playlist saved on this device.", "success");
+  });
+
+  loadPlaylistButton.addEventListener("click", () => {
+    let saved = [];
+
+    try {
+      saved = JSON.parse(window.localStorage.getItem("foryou_saved_watch_playlist") || "[]");
+    } catch (error) {
+      window.localStorage.removeItem("foryou_saved_watch_playlist");
+      setStatus("Saved playlist was damaged. Add videos again.", "error");
+      return;
+    }
+
+    if (!saved.length) {
+      setStatus("No saved playlist on this device.", "error");
+      return;
+    }
+
+    socket.emit("watch:load", { urls: saved.join("\n") }, (result = {}) => {
+      setStatus(result.ok ? "Saved playlist loaded." : result.error || "Could not load playlist.", result.ok ? "success" : "error");
+    });
+  });
+
+  chatForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const text = chatInput.value.trim();
+
+    if (!text) {
+      return;
+    }
+
+    socket.emit("watch:chat", { text }, (result = {}) => {
+      if (!result.ok) {
+        setStatus(result.error || "Could not send chat.", "error");
+      }
+    });
+    chatInput.value = "";
   });
 
   copyLinkButton.addEventListener("click", async () => {
@@ -397,14 +598,18 @@
   }, 1200);
 
   window.addEventListener("load", () => {
+    const params = new URLSearchParams(window.location.search);
     roomId = getRoomId();
     if (!window.location.pathname.startsWith("/watch/")) {
       window.history.replaceState(null, "", `/watch/${encodeURIComponent(roomId)}`);
     }
 
-    nameInput.value = window.localStorage.getItem("foryou_watch_name") || "Me";
+    viewerKey = getViewerKey();
+    nameInput.value = params.get("name") || window.localStorage.getItem("foryou_watch_name") || "Me";
     updateRoomLink();
     renderEmpty();
+    renderPlaylist();
+    renderChat();
     connectSocket();
   });
 })();

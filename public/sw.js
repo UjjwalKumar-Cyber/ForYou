@@ -1,11 +1,11 @@
-const CACHE_NAME = "foryou-static-v16";
+const CACHE_NAME = "foryou-static-v17";
 const STATIC_ASSETS = [
-  "/css/styles.css?v=20260603-integrated",
-  "/js/admin.js?v=20260603-integrated",
+  "/css/styles.css?v=20260603-watchv2",
+  "/js/admin.js?v=20260603-watchv2",
   "/js/message.js?v=20260516-backup5",
   "/js/profile.js?v=20260516-backup5",
   "/js/secret-login.js?v=20260516-backup5",
-  "/js/watch-together.js?v=20260603-youtube153",
+  "/js/watch-together.js?v=20260603-watchv2",
   "/assets/seal.svg",
   "/manifest.webmanifest"
 ];

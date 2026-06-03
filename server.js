@@ -1337,6 +1337,76 @@ function extractWatchSource(input) {
   return null;
 }
 
+function watchSourceKey(source) {
+  if (!source) {
+    return "";
+  }
+
+  if (source.provider === "youtube") {
+    return `youtube:${source.videoId}`;
+  }
+
+  if (source.provider === "instagram") {
+    return `instagram:${source.shortcode}`;
+  }
+
+  return "";
+}
+
+function parseWatchSources(input) {
+  const raw = String(input || "");
+  const candidates = raw
+    .split(/[\s,]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 60);
+  const seen = new Set();
+  const sources = [];
+
+  for (const candidate of candidates) {
+    const source = extractWatchSource(candidate);
+    const key = watchSourceKey(source);
+
+    if (source && key && !seen.has(key)) {
+      seen.add(key);
+      sources.push({
+        ...source,
+        id: key
+      });
+    }
+
+    if (sources.length >= 50) {
+      break;
+    }
+  }
+
+  return sources;
+}
+
+function publicWatchChatMessage(message) {
+  return {
+    id: message.id,
+    displayName: message.displayName,
+    text: message.text,
+    createdAt: message.createdAt
+  };
+}
+
+function publicWatchViewers(room) {
+  const viewersByKey = new Map();
+
+  for (const viewer of room.viewers.values()) {
+    if (!viewersByKey.has(viewer.viewerKey)) {
+      viewersByKey.set(viewer.viewerKey, {
+        id: viewer.id,
+        displayName: viewer.displayName
+      });
+    }
+  }
+
+  return Array.from(viewersByKey.values());
+}
+
 function getWatchRoom(roomId) {
   const now = Date.now();
   const existing = watchRooms.get(roomId);
@@ -1354,7 +1424,10 @@ function getWatchRoom(roomId) {
     updatedAt: now,
     updatedBy: "",
     touchedAt: now,
-    viewers: new Map()
+    currentIndex: 0,
+    playlist: [],
+    viewers: new Map(),
+    chatMessages: []
   };
 
   watchRooms.set(roomId, room);
@@ -1365,15 +1438,40 @@ function publicWatchState(room) {
   return {
     roomId: room.roomId,
     source: room.source,
+    playlist: room.playlist,
+    currentIndex: room.currentIndex,
     currentTime: room.currentTime,
     isPlaying: room.isPlaying,
     updatedAt: room.updatedAt,
     updatedBy: room.updatedBy,
-    viewers: Array.from(room.viewers.values()).map((viewer) => ({
-      id: viewer.id,
-      displayName: viewer.displayName
-    }))
+    viewers: publicWatchViewers(room),
+    chatMessages: room.chatMessages.map(publicWatchChatMessage)
   };
+}
+
+function emitWatchState(room, reason = "sync", senderSocket = null) {
+  const payload = {
+    state: publicWatchState(room),
+    reason
+  };
+
+  if (senderSocket) {
+    senderSocket.to(watchRoom(room.roomId)).emit("watch:state", payload);
+    return;
+  }
+
+  watchNamespace.to(watchRoom(room.roomId)).emit("watch:state", payload);
+}
+
+function setWatchSource(room, index, updatedBy = "Someone") {
+  const safeIndex = Math.max(0, Math.min(Number(index) || 0, Math.max(0, room.playlist.length - 1)));
+  room.currentIndex = safeIndex;
+  room.source = room.playlist[safeIndex] || null;
+  room.currentTime = 0;
+  room.isPlaying = false;
+  room.updatedAt = Date.now();
+  room.updatedBy = updatedBy;
+  room.touchedAt = Date.now();
 }
 
 function emitWatchPresence(room) {
@@ -1407,14 +1505,25 @@ watchNamespace.on("connection", (socket) => {
     }
 
     const displayName = cleanWatchDisplayName(payload.displayName);
+    const viewerKey = cleanWatchRoomId(payload.viewerKey) || socket.id;
     const room = getWatchRoom(roomId);
+    const viewerKeys = new Set(Array.from(room.viewers.values()).map((viewer) => viewer.viewerKey));
+
+    if (!viewerKeys.has(viewerKey) && viewerKeys.size >= 2) {
+      if (typeof callback === "function") {
+        callback({ ok: false, error: "This private watch room already has 2 viewers." });
+      }
+      return;
+    }
 
     socket.data.watchRoomId = roomId;
     socket.data.watchDisplayName = displayName;
+    socket.data.watchViewerKey = viewerKey;
     socket.join(watchRoom(roomId));
 
     room.viewers.set(socket.id, {
       id: socket.id,
+      viewerKey,
       displayName,
       joinedAt: new Date().toISOString()
     });
@@ -1438,26 +1547,148 @@ watchNamespace.on("connection", (socket) => {
       return;
     }
 
-    const source = extractWatchSource(payload.url);
-    if (!source) {
+    const sources = parseWatchSources(payload.url || payload.urls);
+    if (!sources.length) {
       if (typeof callback === "function") {
-        callback({ ok: false, error: "Paste a valid YouTube, YouTube Shorts, or Instagram Reel link." });
+        callback({ ok: false, error: "Paste valid YouTube, YouTube Shorts, or Instagram Reel links." });
       }
       return;
     }
 
-    room.source = source;
-    room.currentTime = 0;
-    room.isPlaying = false;
+    room.playlist = sources;
+    setWatchSource(room, 0, socket.data.watchDisplayName || "Someone");
+    emitWatchState(room, "load");
+
+    if (typeof callback === "function") {
+      callback({ ok: true, state: publicWatchState(room) });
+    }
+  });
+
+  socket.on("watch:playlist:add", (payload = {}, callback) => {
+    const roomId = socket.data.watchRoomId;
+    const room = roomId ? watchRooms.get(roomId) : null;
+    const sources = parseWatchSources(payload.url || payload.urls);
+
+    if (!room || !sources.length) {
+      if (typeof callback === "function") {
+        callback({ ok: false, error: "Paste valid YouTube links first." });
+      }
+      return;
+    }
+
+    const existing = new Set(room.playlist.map(watchSourceKey));
+    for (const source of sources) {
+      const key = watchSourceKey(source);
+      if (key && !existing.has(key) && room.playlist.length < 50) {
+        existing.add(key);
+        room.playlist.push(source);
+      }
+    }
+
+    if (!room.source) {
+      setWatchSource(room, 0, socket.data.watchDisplayName || "Someone");
+    } else {
+      room.updatedAt = Date.now();
+      room.updatedBy = socket.data.watchDisplayName || "Someone";
+      room.touchedAt = Date.now();
+    }
+
+    emitWatchState(room, "playlist");
+    if (typeof callback === "function") {
+      callback({ ok: true, state: publicWatchState(room) });
+    }
+  });
+
+  socket.on("watch:playlist:remove", (payload = {}, callback) => {
+    const roomId = socket.data.watchRoomId;
+    const room = roomId ? watchRooms.get(roomId) : null;
+    const index = Number(payload.index);
+
+    if (!room || !Number.isInteger(index) || index < 0 || index >= room.playlist.length) {
+      if (typeof callback === "function") {
+        callback({ ok: false, error: "Video was not found." });
+      }
+      return;
+    }
+
+    room.playlist.splice(index, 1);
+    setWatchSource(room, Math.min(room.currentIndex, Math.max(0, room.playlist.length - 1)), socket.data.watchDisplayName || "Someone");
+    emitWatchState(room, "playlist");
+    if (typeof callback === "function") {
+      callback({ ok: true, state: publicWatchState(room) });
+    }
+  });
+
+  socket.on("watch:playlist:reorder", (payload = {}, callback) => {
+    const roomId = socket.data.watchRoomId;
+    const room = roomId ? watchRooms.get(roomId) : null;
+    const from = Number(payload.from);
+    const to = Number(payload.to);
+
+    if (!room || !Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < 0 || from >= room.playlist.length || to >= room.playlist.length) {
+      if (typeof callback === "function") {
+        callback({ ok: false, error: "Could not reorder playlist." });
+      }
+      return;
+    }
+
+    const [item] = room.playlist.splice(from, 1);
+    room.playlist.splice(to, 0, item);
+    room.currentIndex = room.playlist.findIndex((source) => watchSourceKey(source) === watchSourceKey(room.source));
+    if (room.currentIndex < 0) {
+      room.currentIndex = 0;
+      room.source = room.playlist[0] || null;
+    }
     room.updatedAt = Date.now();
     room.updatedBy = socket.data.watchDisplayName || "Someone";
     room.touchedAt = Date.now();
-
-    const state = publicWatchState(room);
-    watchNamespace.to(watchRoom(room.roomId)).emit("watch:state", { state, reason: "load" });
-
+    emitWatchState(room, "playlist");
     if (typeof callback === "function") {
-      callback({ ok: true, state });
+      callback({ ok: true, state: publicWatchState(room) });
+    }
+  });
+
+  socket.on("watch:playlist:select", (payload = {}, callback) => {
+    const roomId = socket.data.watchRoomId;
+    const room = roomId ? watchRooms.get(roomId) : null;
+    const index = Number(payload.index);
+
+    if (!room || !Number.isInteger(index) || index < 0 || index >= room.playlist.length) {
+      if (typeof callback === "function") {
+        callback({ ok: false, error: "Video was not found." });
+      }
+      return;
+    }
+
+    setWatchSource(room, index, socket.data.watchDisplayName || "Someone");
+    emitWatchState(room, "select");
+    if (typeof callback === "function") {
+      callback({ ok: true, state: publicWatchState(room) });
+    }
+  });
+
+  socket.on("watch:playlist:next", (payload = {}, callback) => {
+    const roomId = socket.data.watchRoomId;
+    const room = roomId ? watchRooms.get(roomId) : null;
+
+    if (!room || room.currentIndex + 1 >= room.playlist.length) {
+      if (room) {
+        room.isPlaying = false;
+        room.currentTime = 0;
+        room.updatedAt = Date.now();
+        emitWatchState(room, "ended");
+      }
+      if (typeof callback === "function") {
+        callback({ ok: false, error: "Playlist ended." });
+      }
+      return;
+    }
+
+    setWatchSource(room, room.currentIndex + 1, socket.data.watchDisplayName || "Someone");
+    room.isPlaying = Boolean(payload.autoplay);
+    emitWatchState(room, "next");
+    if (typeof callback === "function") {
+      callback({ ok: true, state: publicWatchState(room) });
     }
   });
 
@@ -1494,11 +1725,41 @@ watchNamespace.on("connection", (socket) => {
     room.updatedBy = socket.data.watchDisplayName || "Someone";
     room.touchedAt = Date.now();
 
-    const state = publicWatchState(room);
-    socket.to(watchRoom(room.roomId)).emit("watch:state", { state, reason: action });
+    emitWatchState(room, action, socket);
 
     if (typeof callback === "function") {
-      callback({ ok: true, state });
+      callback({ ok: true, state: publicWatchState(room) });
+    }
+  });
+
+  socket.on("watch:chat", (payload = {}, callback) => {
+    const roomId = socket.data.watchRoomId;
+    const room = roomId ? watchRooms.get(roomId) : null;
+    const text = cleanMessage(payload.text).slice(0, 300);
+
+    if (!room || !text) {
+      if (typeof callback === "function") {
+        callback({ ok: false, error: "Write a message first." });
+      }
+      return;
+    }
+
+    const message = {
+      id: crypto.randomUUID(),
+      displayName: socket.data.watchDisplayName || "Someone",
+      text,
+      createdAt: new Date().toISOString()
+    };
+
+    room.chatMessages.push(message);
+    room.chatMessages = room.chatMessages.slice(-100);
+    room.touchedAt = Date.now();
+    watchNamespace.to(watchRoom(room.roomId)).emit("watch:chat", {
+      message: publicWatchChatMessage(message)
+    });
+
+    if (typeof callback === "function") {
+      callback({ ok: true });
     }
   });
 
@@ -1702,6 +1963,28 @@ io.on("connection", (socket) => {
     } catch (error) {
       console.error("Typing event failed.", error);
     }
+  });
+
+  socket.on("watch:invite", ({ recipientUsername, roomId } = {}) => {
+    const recipient = normalizeUsername(recipientUsername);
+    const safeRoomId = cleanWatchRoomId(roomId);
+
+    if (!recipient || !safeRoomId || recipient === account.username) {
+      return;
+    }
+
+    const invite = {
+      roomId: safeRoomId,
+      from: account.username,
+      displayName: account.displayName || account.username,
+      createdAt: new Date().toISOString()
+    };
+
+    io.to(userRoom(recipient)).emit("watch:invite", invite);
+    io.to(userRoom(account.username)).emit("watch:invite:sent", {
+      ...invite,
+      recipientUsername: recipient
+    });
   });
 
   socket.on("disconnect", () => {

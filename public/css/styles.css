@@ -291,19 +291,24 @@ body::before {
 }
 
 .watch-card input,
-.watch-video-form input {
+.watch-video-form input,
+.watch-link-box,
+.watch-chat-form input {
   width: 100%;
   min-height: 48px;
-  padding: 0 14px;
+  padding: 12px 14px;
   border: 1px solid rgba(255, 230, 238, 0.16);
   border-radius: 14px;
   outline: none;
   background: rgba(255, 255, 255, 0.07);
   color: var(--text);
+  resize: vertical;
 }
 
 .watch-card input:focus,
-.watch-video-form input:focus {
+.watch-video-form input:focus,
+.watch-link-box:focus,
+.watch-chat-form input:focus {
   border-color: rgba(244, 199, 119, 0.54);
   box-shadow: 0 0 0 4px rgba(244, 199, 119, 0.1);
 }
@@ -311,7 +316,13 @@ body::before {
 .watch-copy-row,
 .watch-video-form {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.watch-form-actions,
+.watch-mini-actions {
+  display: flex;
+  flex-wrap: wrap;
   gap: 10px;
 }
 
@@ -387,6 +398,104 @@ body::before {
 .watch-footer-card {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
+}
+
+.watch-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.72fr);
+  gap: 14px;
+}
+
+.watch-section-topline {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.watch-section-topline h2,
+.watch-chat-card h2 {
+  margin: 0;
+}
+
+.watch-playlist {
+  display: grid;
+  max-height: 280px;
+  overflow: auto;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.watch-playlist-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid rgba(255, 230, 238, 0.13);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.watch-playlist-item.is-current {
+  border-color: rgba(244, 199, 119, 0.44);
+  background: rgba(244, 199, 119, 0.1);
+}
+
+.watch-playlist-item.is-dragging {
+  opacity: 0.58;
+}
+
+.watch-playlist-title,
+.watch-playlist-actions button {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 800;
+  text-align: left;
+}
+
+.watch-playlist-actions button {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.watch-chat-card {
+  grid-template-rows: auto minmax(180px, 1fr) auto;
+}
+
+.watch-chat-list {
+  display: grid;
+  align-content: start;
+  max-height: 300px;
+  overflow: auto;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.watch-chat-message {
+  padding: 9px 10px;
+  border: 1px solid rgba(255, 230, 238, 0.12);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.watch-chat-message strong,
+.watch-chat-message p {
+  display: block;
+  margin: 0;
+}
+
+.watch-chat-message strong {
+  color: var(--gold);
+  font-size: 0.82rem;
+}
+
+.watch-chat-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
 }
 
 .watch-viewers {
@@ -708,6 +817,44 @@ textarea:focus-visible {
   touch-action: pan-y;
   -webkit-overflow-scrolling: touch;
   animation: drawerIn var(--motion-medium) var(--ease-soft) both;
+}
+
+.watch-in-app-panel {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 32;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(980px, calc(100vw - 36px));
+  height: min(780px, calc(100dvh - 36px));
+  overflow: hidden;
+  border: 1px solid rgba(255, 230, 238, 0.18);
+  border-radius: 22px;
+  background: rgba(16, 13, 18, 0.98);
+  box-shadow: var(--shadow);
+  animation: drawerIn var(--motion-medium) var(--ease-soft) both;
+}
+
+.watch-in-app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(255, 230, 238, 0.13);
+}
+
+.watch-in-app-header h2,
+.watch-in-app-header p {
+  margin: 0;
+}
+
+.watch-in-app-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: var(--bg);
 }
 
 .peer-profile-preview {
@@ -2648,7 +2795,9 @@ h1 {
   .watch-room-card,
   .watch-copy-row,
   .watch-video-form,
-  .watch-footer-card {
+  .watch-footer-card,
+  .watch-grid,
+  .watch-chat-form {
     grid-template-columns: 1fr;
   }
 
@@ -2670,6 +2819,13 @@ h1 {
 
   .watch-reactions button {
     flex: 1 1 30%;
+  }
+
+  .watch-in-app-panel {
+    inset: 0;
+    width: 100vw;
+    height: 100dvh;
+    border-radius: 0;
   }
 }
 
