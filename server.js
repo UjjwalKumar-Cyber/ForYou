@@ -1387,6 +1387,7 @@ function publicWatchChatMessage(message) {
   return {
     id: message.id,
     displayName: message.displayName,
+    username: message.username || "",
     text: message.text,
     createdAt: message.createdAt
   };
@@ -1399,6 +1400,7 @@ function publicWatchViewers(room) {
     if (!viewersByKey.has(viewer.viewerKey)) {
       viewersByKey.set(viewer.viewerKey, {
         id: viewer.id,
+        username: viewer.username || "",
         displayName: viewer.displayName
       });
     }
@@ -1504,7 +1506,13 @@ watchNamespace.on("connection", (socket) => {
       return;
     }
 
-    const displayName = cleanWatchDisplayName(payload.displayName);
+    const accountUser = socket.request.session && socket.request.session.accountUser;
+    const username = normalizeUsername(accountUser && accountUser.username ? accountUser.username : payload.username);
+    const displayName = cleanWatchDisplayName(
+      accountUser && accountUser.displayName
+        ? accountUser.displayName
+        : payload.displayName
+    );
     const viewerKey = cleanWatchRoomId(payload.viewerKey) || socket.id;
     const room = getWatchRoom(roomId);
     const viewerKeys = new Set(Array.from(room.viewers.values()).map((viewer) => viewer.viewerKey));
@@ -1518,12 +1526,14 @@ watchNamespace.on("connection", (socket) => {
 
     socket.data.watchRoomId = roomId;
     socket.data.watchDisplayName = displayName;
+    socket.data.watchUsername = username;
     socket.data.watchViewerKey = viewerKey;
     socket.join(watchRoom(roomId));
 
     room.viewers.set(socket.id, {
       id: socket.id,
       viewerKey,
+      username,
       displayName,
       joinedAt: new Date().toISOString()
     });
@@ -1747,6 +1757,7 @@ watchNamespace.on("connection", (socket) => {
     const message = {
       id: crypto.randomUUID(),
       displayName: socket.data.watchDisplayName || "Someone",
+      username: socket.data.watchUsername || "",
       text,
       createdAt: new Date().toISOString()
     };
@@ -1965,7 +1976,7 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("watch:invite", ({ recipientUsername, roomId } = {}) => {
+  socket.on("watch:invite", async ({ recipientUsername, roomId } = {}) => {
     const recipient = normalizeUsername(recipientUsername);
     const safeRoomId = cleanWatchRoomId(roomId);
 
@@ -1973,18 +1984,60 @@ io.on("connection", (socket) => {
       return;
     }
 
-    const invite = {
-      roomId: safeRoomId,
-      from: account.username,
-      displayName: account.displayName || account.username,
-      createdAt: new Date().toISOString()
-    };
+    try {
+      const recipientUser = await findUser(recipient);
 
-    io.to(userRoom(recipient)).emit("watch:invite", invite);
-    io.to(userRoom(account.username)).emit("watch:invite:sent", {
-      ...invite,
-      recipientUsername: recipient
-    });
+      if (!recipientUser || isAccountBlocked(recipientUser)) {
+        return;
+      }
+
+      const now = Date.now();
+      const inviteKey = `${recipient}:${safeRoomId}`;
+      const recentInvites = socket.data.recentWatchInvites || new Map();
+      socket.data.recentWatchInvites = recentInvites;
+
+      if (now - (recentInvites.get(inviteKey) || 0) < 15000) {
+        io.to(userRoom(account.username)).emit("watch:invite:sent", {
+          roomId: safeRoomId,
+          from: account.username,
+          displayName: account.displayName || account.username,
+          recipientUsername: recipient,
+          createdAt: new Date().toISOString()
+        });
+        return;
+      }
+
+      recentInvites.set(inviteKey, now);
+
+      const invite = {
+        roomId: safeRoomId,
+        from: account.username,
+        displayName: account.displayName || account.username,
+        createdAt: new Date().toISOString()
+      };
+
+      io.to(userRoom(recipient)).emit("watch:invite", invite);
+      io.to(userRoom(account.username)).emit("watch:invite:sent", {
+        ...invite,
+        recipientUsername: recipient
+      });
+
+      try {
+        const watchNotice = await addMessage({
+          text: `${account.displayName || account.username} started a Watch Together room. Open this chat and tap Watch to join.`,
+          senderName: account.displayName || account.username,
+          senderUsername: account.username,
+          recipientUsername: recipient,
+          kind: "text"
+        });
+
+        emitConversationUpdate(account.username, recipient, watchNotice);
+      } catch (noticeError) {
+        console.warn("Watch invite chat notice was not saved.", noticeError.message);
+      }
+    } catch (error) {
+      console.error("Watch invite failed.", error);
+    }
   });
 
   socket.on("disconnect", () => {

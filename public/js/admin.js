@@ -356,7 +356,8 @@ function openInAppWatch(roomId, label = "Private room") {
   }
 
   const displayName = currentUser ? currentUser.displayName || currentUser.username || "Me" : "Me";
-  const roomPath = `/watch/${encodeURIComponent(roomId)}?embed=1&name=${encodeURIComponent(displayName)}`;
+  const username = currentUser ? currentUser.username || "" : "";
+  const roomPath = `/watch/${encodeURIComponent(roomId)}?embed=1&name=${encodeURIComponent(displayName)}&username=${encodeURIComponent(username)}`;
 
   if (!watchInAppPanel || !watchInAppFrame || !watchInAppTitle) {
     window.open(roomPath, "_blank", "noopener");

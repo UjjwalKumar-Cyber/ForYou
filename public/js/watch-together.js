@@ -31,6 +31,7 @@
   let lastKnownTime = 0;
   let lastLoadedVideoId = "";
   let viewerKey = "";
+  let accountUsername = "";
   let draggedPlaylistIndex = -1;
 
   function setStatus(message, type = "neutral") {
@@ -52,6 +53,29 @@
 
   function getDisplayName() {
     return String(nameInput.value || "").trim().slice(0, 28) || "Someone";
+  }
+
+  function cleanUsername(input) {
+    return String(input || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_.-]/g, "")
+      .slice(0, 40);
+  }
+
+  function participantLabel(participant = {}) {
+    const displayName = String(participant.displayName || "").trim();
+    const username = cleanUsername(participant.username);
+
+    if (displayName && username && displayName.toLowerCase() !== username) {
+      return `${displayName} (@${username})`;
+    }
+
+    if (username) {
+      return `@${username}`;
+    }
+
+    return displayName || "Someone";
   }
 
   function getViewerKey() {
@@ -94,7 +118,7 @@
     viewersElement.replaceChildren(
       ...viewers.map((viewer) => {
         const item = document.createElement("span");
-        item.textContent = viewer.displayName || "Someone";
+        item.textContent = participantLabel(viewer);
         return item;
       })
     );
@@ -194,7 +218,7 @@
         const text = document.createElement("p");
 
         item.className = "watch-chat-message";
-        sender.textContent = message.displayName || "Someone";
+        sender.textContent = participantLabel(message);
         text.textContent = message.text || "";
         item.append(sender, text);
         return item;
@@ -285,6 +309,15 @@
       action,
       currentTime: currentPlayerTime(),
       isPlaying: action === "play" ? true : action === "pause" ? false : latestState.isPlaying
+    }, async (result = {}) => {
+      if (result.ok && result.state) {
+        await applyState(result.state, action);
+        return;
+      }
+
+      if (result.error) {
+        setStatus(result.error, "error");
+      }
     });
   }
 
@@ -308,7 +341,11 @@
     }
 
     if (event.data === window.YT.PlayerState.ENDED) {
-      socket.emit("watch:playlist:next", { autoplay: true });
+      socket.emit("watch:playlist:next", { autoplay: true }, async (result = {}) => {
+        if (result.ok && result.state) {
+          await applyState(result.state, "next");
+        }
+      });
     }
   }
 
@@ -403,6 +440,7 @@
     socket.emit("watch:join", {
       roomId,
       displayName: getDisplayName(),
+      username: accountUsername,
       viewerKey
     }, async (result = {}) => {
       if (!result.ok) {
@@ -566,6 +604,12 @@
   });
 
   syncNowButton.addEventListener("click", async () => {
+    if (latestState && latestState.source) {
+      emitControl("sync");
+      setStatus("Syncing both screens...", "neutral");
+      return;
+    }
+
     if (latestState) {
       await applyState(latestState, "manual-sync");
       setStatus("Synced to the room.", "success");
@@ -605,6 +649,7 @@
     }
 
     viewerKey = getViewerKey();
+    accountUsername = cleanUsername(params.get("username") || "");
     nameInput.value = params.get("name") || window.localStorage.getItem("foryou_watch_name") || "Me";
     updateRoomLink();
     renderEmpty();
