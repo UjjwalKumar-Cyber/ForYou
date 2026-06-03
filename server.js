@@ -81,7 +81,7 @@ const io = new Server(httpServer, {
 const PORT = Number(process.env.PORT || 3000);
 const SECRET_PATH = "/secret-8392-love-note";
 const SECRET_PAGE_ENABLED = process.env.ENABLE_SECRET_PAGE === "true";
-const SERVICE_DISCONTINUED = process.env.SERVICE_DISCONTINUED !== "false";
+const SERVICE_DISCONTINUED = process.env.SERVICE_DISCONTINUED === "true";
 const isProduction = process.env.NODE_ENV === "production";
 const ACTIVE_WINDOW_MS = 1000 * 60 * 2;
 const ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
@@ -92,6 +92,7 @@ const MESSAGE_PAGE_LIMIT = 50;
 const CHAT_LIST_LIMIT = 50;
 const ADMIN_ROOM = "ultimate-admins";
 const APP_CACHE_VERSION = "20260516-backup5";
+const WATCH_ROOM_TTL_MS = 1000 * 60 * 60 * 12;
 const CLOUDINARY_ENABLED = Boolean(
   process.env.CLOUDINARY_URL ||
     (process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET)
@@ -199,6 +200,7 @@ const SESSION_SECRET = SERVICE_DISCONTINUED
 process.env.ADMIN_PASSWORD = ADMIN_PASSWORD;
 
 const activeUsers = new Map();
+const watchRooms = new Map();
 let userListCache = {
   expiresAt: 0,
   users: null
@@ -217,8 +219,9 @@ const cspDirectives = {
   imgSrc: ["'self'", "data:", "https:"],
   mediaSrc: ["'self'", "data:", "blob:", "https:"],
   objectSrc: ["'none'"],
-  scriptSrc: ["'self'"],
-  styleSrc: ["'self'"]
+  scriptSrc: ["'self'", "https://www.youtube.com", "https://s.ytimg.com"],
+  styleSrc: ["'self'"],
+  frameSrc: ["'self'", "https://www.youtube.com", "https://www.youtube-nocookie.com", "https://www.instagram.com"]
 };
 
 if (isProduction) {
@@ -271,6 +274,11 @@ if (SERVICE_DISCONTINUED) {
       }
     })
   );
+
+  app.get(["/watch-together", "/watch/:room"], (req, res) => {
+    res.set("Cache-Control", "no-store, private");
+    res.sendFile(path.join(__dirname, "views", "watch-together.html"));
+  });
 
   app.get("/robots.txt", (req, res) => {
     res.type("text/plain").send("User-agent: *\nDisallow: /\n");
@@ -1257,6 +1265,275 @@ function userRoom(username) {
   return `user:${normalizeUsername(username)}`;
 }
 
+function watchRoom(roomId) {
+  return `watch:${roomId}`;
+}
+
+function cleanWatchRoomId(input) {
+  const value = String(input || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]/g, "")
+    .slice(0, 48);
+
+  return value.length >= 4 ? value : "";
+}
+
+function cleanWatchDisplayName(input) {
+  return cleanDisplayName(input).slice(0, 28) || "Someone";
+}
+
+function extractWatchSource(input) {
+  const raw = String(input || "").trim();
+
+  if (!raw || raw.length > 400) {
+    return null;
+  }
+
+  let url;
+  try {
+    url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+  } catch (error) {
+    return null;
+  }
+
+  const hostname = url.hostname.toLowerCase().replace(/^www\./, "");
+  const pathParts = url.pathname.split("/").filter(Boolean);
+
+  if (hostname === "youtu.be") {
+    const videoId = pathParts[0] || "";
+    if (/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+      return {
+        provider: "youtube",
+        videoId,
+        originalUrl: `https://youtu.be/${videoId}`
+      };
+    }
+  }
+
+  if (hostname === "youtube.com" || hostname === "m.youtube.com" || hostname === "music.youtube.com") {
+    const videoId = url.searchParams.get("v") || (["shorts", "embed"].includes(pathParts[0]) ? pathParts[1] : "");
+    if (/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+      return {
+        provider: "youtube",
+        videoId,
+        originalUrl: `https://www.youtube.com/watch?v=${videoId}`
+      };
+    }
+  }
+
+  if (hostname === "instagram.com") {
+    const type = ["reel", "p", "tv"].includes(pathParts[0]) ? pathParts[0] : "";
+    const shortcode = pathParts[1] || "";
+    if (type && /^[a-zA-Z0-9_-]+$/.test(shortcode)) {
+      return {
+        provider: "instagram",
+        shortcode,
+        embedUrl: `https://www.instagram.com/${type}/${shortcode}/embed`,
+        originalUrl: `https://www.instagram.com/${type}/${shortcode}/`
+      };
+    }
+  }
+
+  return null;
+}
+
+function getWatchRoom(roomId) {
+  const now = Date.now();
+  const existing = watchRooms.get(roomId);
+
+  if (existing) {
+    existing.touchedAt = now;
+    return existing;
+  }
+
+  const room = {
+    roomId,
+    source: null,
+    currentTime: 0,
+    isPlaying: false,
+    updatedAt: now,
+    updatedBy: "",
+    touchedAt: now,
+    viewers: new Map()
+  };
+
+  watchRooms.set(roomId, room);
+  return room;
+}
+
+function publicWatchState(room) {
+  return {
+    roomId: room.roomId,
+    source: room.source,
+    currentTime: room.currentTime,
+    isPlaying: room.isPlaying,
+    updatedAt: room.updatedAt,
+    updatedBy: room.updatedBy,
+    viewers: Array.from(room.viewers.values()).map((viewer) => ({
+      id: viewer.id,
+      displayName: viewer.displayName
+    }))
+  };
+}
+
+function emitWatchPresence(room) {
+  watchNamespace.to(watchRoom(room.roomId)).emit("watch:presence", {
+    roomId: room.roomId,
+    viewers: publicWatchState(room).viewers
+  });
+}
+
+function cleanOldWatchRooms() {
+  const now = Date.now();
+
+  for (const [roomId, room] of watchRooms.entries()) {
+    if (!room.viewers.size && now - room.touchedAt > WATCH_ROOM_TTL_MS) {
+      watchRooms.delete(roomId);
+    }
+  }
+}
+
+const watchNamespace = io.of("/watch");
+
+watchNamespace.on("connection", (socket) => {
+  socket.on("watch:join", (payload = {}, callback) => {
+    const roomId = cleanWatchRoomId(payload.roomId);
+
+    if (!roomId) {
+      if (typeof callback === "function") {
+        callback({ ok: false, error: "Room link is not valid." });
+      }
+      return;
+    }
+
+    const displayName = cleanWatchDisplayName(payload.displayName);
+    const room = getWatchRoom(roomId);
+
+    socket.data.watchRoomId = roomId;
+    socket.data.watchDisplayName = displayName;
+    socket.join(watchRoom(roomId));
+
+    room.viewers.set(socket.id, {
+      id: socket.id,
+      displayName,
+      joinedAt: new Date().toISOString()
+    });
+    room.touchedAt = Date.now();
+
+    if (typeof callback === "function") {
+      callback({ ok: true, state: publicWatchState(room) });
+    }
+
+    emitWatchPresence(room);
+  });
+
+  socket.on("watch:load", (payload = {}, callback) => {
+    const roomId = socket.data.watchRoomId;
+    const room = roomId ? watchRooms.get(roomId) : null;
+
+    if (!room) {
+      if (typeof callback === "function") {
+        callback({ ok: false, error: "Join a room first." });
+      }
+      return;
+    }
+
+    const source = extractWatchSource(payload.url);
+    if (!source) {
+      if (typeof callback === "function") {
+        callback({ ok: false, error: "Paste a valid YouTube, YouTube Shorts, or Instagram Reel link." });
+      }
+      return;
+    }
+
+    room.source = source;
+    room.currentTime = 0;
+    room.isPlaying = false;
+    room.updatedAt = Date.now();
+    room.updatedBy = socket.data.watchDisplayName || "Someone";
+    room.touchedAt = Date.now();
+
+    const state = publicWatchState(room);
+    watchNamespace.to(watchRoom(room.roomId)).emit("watch:state", { state, reason: "load" });
+
+    if (typeof callback === "function") {
+      callback({ ok: true, state });
+    }
+  });
+
+  socket.on("watch:control", (payload = {}, callback) => {
+    const roomId = socket.data.watchRoomId;
+    const room = roomId ? watchRooms.get(roomId) : null;
+    const action = String(payload.action || "").toLowerCase();
+
+    if (!room || !room.source) {
+      if (typeof callback === "function") {
+        callback({ ok: false, error: "Load a video first." });
+      }
+      return;
+    }
+
+    if (room.source.provider !== "youtube") {
+      if (typeof callback === "function") {
+        callback({ ok: false, error: "Instagram Reels can be opened together, but browser sync is only available for YouTube." });
+      }
+      return;
+    }
+
+    if (!["play", "pause", "seek", "sync"].includes(action)) {
+      if (typeof callback === "function") {
+        callback({ ok: false, error: "Unknown watch action." });
+      }
+      return;
+    }
+
+    const currentTime = Math.max(0, Math.min(Number(payload.currentTime) || 0, 60 * 60 * 12));
+    room.currentTime = currentTime;
+    room.isPlaying = action === "play" ? true : action === "pause" ? false : Boolean(payload.isPlaying);
+    room.updatedAt = Date.now();
+    room.updatedBy = socket.data.watchDisplayName || "Someone";
+    room.touchedAt = Date.now();
+
+    const state = publicWatchState(room);
+    socket.to(watchRoom(room.roomId)).emit("watch:state", { state, reason: action });
+
+    if (typeof callback === "function") {
+      callback({ ok: true, state });
+    }
+  });
+
+  socket.on("watch:reaction", (payload = {}) => {
+    const roomId = socket.data.watchRoomId;
+    const room = roomId ? watchRooms.get(roomId) : null;
+    const reaction = cleanText(payload.reaction).slice(0, 8) || "heart";
+
+    if (!room) {
+      return;
+    }
+
+    watchNamespace.to(watchRoom(room.roomId)).emit("watch:reaction", {
+      reaction,
+      displayName: socket.data.watchDisplayName || "Someone",
+      createdAt: new Date().toISOString()
+    });
+  });
+
+  socket.on("disconnect", () => {
+    const roomId = socket.data.watchRoomId;
+    const room = roomId ? watchRooms.get(roomId) : null;
+
+    if (!room) {
+      return;
+    }
+
+    room.viewers.delete(socket.id);
+    room.touchedAt = Date.now();
+    emitWatchPresence(room);
+  });
+});
+
+setInterval(cleanOldWatchRooms, 1000 * 60 * 30);
+
 async function emitPresenceUpdate() {
   try {
     const users = await getCachedUsers();
@@ -1462,6 +1739,10 @@ app.get("/admin", (req, res) => {
 
 app.get("/profile", (req, res) => {
   sendView(res, "profile.html");
+});
+
+app.get(["/watch-together", "/watch/:room"], (req, res) => {
+  sendView(res, "watch-together.html");
 });
 
 app.post("/api/login", loginLimiter, async (req, res, next) => {

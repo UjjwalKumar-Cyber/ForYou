@@ -85,25 +85,24 @@ cp .env.example .env
 Edit `.env`:
 
 ```bash
-SERVICE_DISCONTINUED=true
+SERVICE_DISCONTINUED=false
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=your-admin-password
 SESSION_SECRET=generate-a-long-random-string
 ENABLE_SECRET_PAGE=false
 ```
 
-## Archived Service Mode
+## Service Mode
 
-The project is currently set to archived/discontinued mode with:
+The project is currently set to live mode with:
 
 ```bash
-SERVICE_DISCONTINUED=true
+SERVICE_DISCONTINUED=false
 ```
 
-In this mode, every public page shows a simple discontinued notice, API requests
-return `410 Gone`, and the server does not initialize the chat database. The old
-chat/admin/profile code remains in the project archive. To temporarily restore
-the full app later, set `SERVICE_DISCONTINUED=false` and redeploy.
+In live mode, `/admin`, `/profile`, chats, admin tools, and `/watch-together`
+are available. To temporarily show only the discontinued notice later, set
+`SERVICE_DISCONTINUED=true` and redeploy.
 
 Generate a session secret:
 

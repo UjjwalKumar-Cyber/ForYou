@@ -54,6 +54,11 @@ const monitorUserList = document.querySelector("#monitor-user-list");
 const monitorEventList = document.querySelector("#monitor-event-list");
 const monitorStatus = document.querySelector("#monitor-status");
 const monitorRefreshButton = document.querySelector("#monitor-refresh-button");
+const backupNowButton = document.querySelector("#backup-now-button");
+const backupStatus = document.querySelector("#backup-status");
+const backupHistoryList = document.querySelector("#backup-history-list");
+const storageSummaryGrid = document.querySelector("#storage-summary-grid");
+const storageTableList = document.querySelector("#storage-table-list");
 const cleanupStorageButton = document.querySelector("#cleanup-storage-button");
 const cleanupStorageStatus = document.querySelector("#cleanup-storage-status");
 const notificationStack = document.querySelector("#notification-stack");
@@ -630,6 +635,101 @@ function renderNotificationHistory(data) {
   );
 }
 
+function renderStorageSummary(summary) {
+  if (!storageSummaryGrid || !storageTableList) {
+    return;
+  }
+
+  const stats = summary.stats || {};
+  const latestBackup = summary.latestBackup || null;
+  storageSummaryGrid.replaceChildren(
+    makeMonitorStat("storage", summary.prettyTotal || "0 B"),
+    makeMonitorStat("users", stats.totalUsers || 0),
+    makeMonitorStat("messages", stats.totalMessages || 0),
+    makeMonitorStat("media", summary.mediaStorageMode || "Database"),
+    makeMonitorStat("latest backup", latestBackup ? formatShortDate(latestBackup.createdAt) : "none")
+  );
+
+  const tables = summary.tables || [];
+  if (!tables.length) {
+    storageTableList.replaceChildren(makeEmptyState("No storage data yet."));
+    return;
+  }
+
+  storageTableList.replaceChildren(
+    ...tables.map((table) => {
+      const item = document.createElement("p");
+      item.className = "storage-table-item";
+      item.textContent = `${table.name}: ${table.rows || 0} rows${table.bytes ? ` • ${table.bytes} bytes` : ""}`;
+      return item;
+    })
+  );
+}
+
+function renderBackupHistory(backups) {
+  if (!backupHistoryList) {
+    return;
+  }
+
+  if (!backups || !backups.length) {
+    backupHistoryList.replaceChildren(makeEmptyState("No backups yet."));
+    return;
+  }
+
+  backupHistoryList.replaceChildren(
+    ...backups.map((backup) => {
+      const item = document.createElement("article");
+      const title = document.createElement("strong");
+      const meta = document.createElement("small");
+      const details = document.createElement("p");
+
+      item.className = "backup-history-item";
+      title.textContent = backup.status === "completed" ? backup.fileName || "Backup completed" : "Backup failed";
+      meta.textContent = `${backup.storageMode || "local"} • ${formatShortDate(backup.createdAt)} • ${backup.createdBy || "admin"}`;
+      details.textContent = backup.status === "completed"
+        ? `${backup.sizeBytes || 0} bytes • ${(backup.rowCounts && backup.rowCounts.messages) || 0} messages`
+        : backup.error || "Backup failed";
+
+      item.append(title, meta, details);
+      return item;
+    })
+  );
+}
+
+async function loadStorageSummary() {
+  if (!isUltimateAdminUser(currentUser)) {
+    return;
+  }
+
+  try {
+    const response = await fetch("/api/admin/storage-summary", { cache: "no-store" });
+    const result = await response.json();
+
+    if (response.ok) {
+      renderStorageSummary(result.summary || {});
+    }
+  } catch {
+    setInlineStatus(backupStatus, "Could not load storage summary.", "error");
+  }
+}
+
+async function loadBackups() {
+  if (!isUltimateAdminUser(currentUser)) {
+    return;
+  }
+
+  try {
+    const response = await fetch("/api/admin/backups", { cache: "no-store" });
+    const result = await response.json();
+
+    if (response.ok) {
+      renderBackupHistory(result.backups || []);
+    }
+  } catch {
+    setInlineStatus(backupStatus, "Could not load backup history.", "error");
+  }
+}
+
 function ensureConversationForRecipients() {
   const existing = new Set(conversations.map((item) => item.peerUsername));
   const additions = recipients
@@ -1005,6 +1105,8 @@ async function loadSession() {
     await loadNotifications();
     await loadAdminMonitoring();
     await loadAdminNotifications();
+    await loadStorageSummary();
+    await loadBackups();
 
     showMessagesPanel();
     document.getElementById("admin-loading-panel")?.classList.add("is-hidden");
@@ -1118,6 +1220,8 @@ function scheduleMonitoringLoad() {
   monitoringDebounceTimer = window.setTimeout(() => {
     loadAdminMonitoring();
     loadAdminNotifications();
+    loadStorageSummary();
+    loadBackups();
   }, 350);
 }
 
@@ -1200,7 +1304,7 @@ async function cleanStorage() {
   setInlineStatus(cleanupStorageStatus, "Cleaning logs...", "neutral");
 
   try {
-    const response = await fetch("/api/admin/cleanup-storage", {
+    const response = await fetch("/api/admin/cleanup-logs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ confirm: true })
@@ -1219,10 +1323,45 @@ async function cleanStorage() {
     );
     await loadAdminMonitoring();
     await loadAdminNotifications();
+    await loadStorageSummary();
   } catch {
     setInlineStatus(cleanupStorageStatus, "Network error while cleaning storage.", "error");
   } finally {
     cleanupStorageButton.disabled = false;
+  }
+}
+
+async function backupNow() {
+  if (!isUltimateAdminUser(currentUser) || !backupNowButton) {
+    return;
+  }
+
+  backupNowButton.disabled = true;
+  setInlineStatus(backupStatus, "Creating backup...", "neutral");
+
+  try {
+    const response = await fetch("/api/admin/backup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({})
+    });
+    const result = await response.json();
+
+    if (!response.ok) {
+      setInlineStatus(backupStatus, result.error || "Backup failed", "error");
+      await loadBackups();
+      return;
+    }
+
+    const location = result.downloadUrl || result.filePath || result.folderPath || "backup history";
+    setInlineStatus(backupStatus, `Backup completed. Saved to ${location}.`, "success");
+    await loadStorageSummary();
+    await loadBackups();
+  } catch {
+    setInlineStatus(backupStatus, "Backup failed", "error");
+    await loadBackups();
+  } finally {
+    backupNowButton.disabled = false;
   }
 }
 
@@ -1806,6 +1945,8 @@ loginForm.addEventListener("submit", async (event) => {
     await loadNotifications();
     await loadAdminMonitoring();
     await loadAdminNotifications();
+    await loadStorageSummary();
+    await loadBackups();
   } catch {
     setLoginMessage("Network error. Please try again.", "error");
   } finally {
@@ -1815,6 +1956,7 @@ loginForm.addEventListener("submit", async (event) => {
 
 refreshButton.addEventListener("click", loadAll);
 monitorRefreshButton?.addEventListener("click", loadAdminMonitoring);
+backupNowButton?.addEventListener("click", backupNow);
 cleanupStorageButton?.addEventListener("click", cleanStorage);
 notificationForm?.addEventListener("submit", sendAdminNotification);
 backChatButton.addEventListener("click", closeConversation);

@@ -128,6 +128,9 @@ function normalizeImage(message) {
   const image = message.image || {};
   const data = image.data || message.imageData || message.image_data || null;
   const url = image.url || message.imageUrl || message.image_url || "";
+  const publicId = image.publicId || message.imagePublicId || message.image_public_id || "";
+  const resourceType = image.resourceType || message.imageResourceType || message.image_resource_type || "";
+  const storage = image.storage || message.imageStorage || message.image_storage || (url ? "cloudinary" : "database");
 
   if (!data && !url) {
     return null;
@@ -138,6 +141,9 @@ function normalizeImage(message) {
   return {
     data,
     url,
+    publicId,
+    resourceType,
+    storage,
     mime: image.mime || message.imageMime || message.image_mime || "image/jpeg",
     name: image.name || message.imageName || message.image_name || "attached image",
     size: Number.isFinite(size) ? size : 0
@@ -169,7 +175,32 @@ function normalizeAttachment(message) {
     message.imageData ||
     message.image_data ||
     null;
-  const url = attachment.url || message.attachmentUrl || message.attachment_url || message.imageUrl || message.image_url || "";
+  const url = attachment.url || message.attachmentUrl || message.attachment_url || message.mediaUrl || message.media_url || message.imageUrl || message.image_url || "";
+  const publicId =
+    attachment.publicId ||
+    message.attachmentPublicId ||
+    message.attachment_public_id ||
+    message.mediaPublicId ||
+    message.media_public_id ||
+    message.imagePublicId ||
+    message.image_public_id ||
+    "";
+  const resourceType =
+    attachment.resourceType ||
+    message.attachmentResourceType ||
+    message.attachment_resource_type ||
+    message.mediaType ||
+    message.media_type ||
+    message.imageResourceType ||
+    message.image_resource_type ||
+    "";
+  const storage =
+    attachment.storage ||
+    message.attachmentStorage ||
+    message.attachment_storage ||
+    message.imageStorage ||
+    message.image_storage ||
+    (url ? "cloudinary" : "database");
 
   if (!data && !url) {
     return null;
@@ -179,6 +210,8 @@ function normalizeAttachment(message) {
     attachment.size ||
       message.attachmentSize ||
       message.attachment_size ||
+      message.mediaSize ||
+      message.media_size ||
       message.imageSize ||
       message.image_size ||
       0
@@ -187,10 +220,15 @@ function normalizeAttachment(message) {
   return {
     data,
     url,
+    publicId,
+    resourceType,
+    storage,
     mime:
       attachment.mime ||
       message.attachmentMime ||
       message.attachment_mime ||
+      message.mediaMime ||
+      message.media_mime ||
       message.imageMime ||
       message.image_mime ||
       "application/octet-stream",
@@ -198,6 +236,8 @@ function normalizeAttachment(message) {
       attachment.name ||
       message.attachmentName ||
       message.attachment_name ||
+      message.originalName ||
+      message.original_name ||
       message.imageName ||
       message.image_name ||
       "attachment",
@@ -241,6 +281,7 @@ function normalizeUser(user) {
     emailVerified: Boolean(user.emailVerified || user.email_verified),
     profileImageData: user.profileImageData || user.profile_image_data || "",
     profileImageUrl: user.profileImageUrl || user.profile_image_url || "",
+    profileImagePublicId: user.profileImagePublicId || user.profile_image_public_id || "",
     profileImageMime: user.profileImageMime || user.profile_image_mime || "",
     profileImageName: user.profileImageName || user.profile_image_name || "",
     hasProfileImage: Boolean(user.hasProfileImage || user.has_profile_image || hasProfileImage(user)),
@@ -282,6 +323,7 @@ function normalizeStore(rawStore) {
     adminActionLogs: Array.isArray(rawStore.adminActionLogs) ? rawStore.adminActionLogs : [],
     auditLogs: Array.isArray(rawStore.auditLogs) ? rawStore.auditLogs : [],
     restrictedSearchTerms: Array.isArray(rawStore.restrictedSearchTerms) ? rawStore.restrictedSearchTerms : [],
+    backupHistory: Array.isArray(rawStore.backupHistory) ? rawStore.backupHistory.map(normalizeBackupRecord) : [],
     notificationAlerts: Array.isArray(rawStore.notificationAlerts)
       ? rawStore.notificationAlerts.map(normalizeNotification)
       : []
@@ -402,6 +444,24 @@ function normalizeNotification(row = {}) {
   };
 }
 
+function normalizeBackupRecord(row = {}) {
+  return {
+    id: String(row.id || crypto.randomUUID()),
+    createdAt: row.createdAt || row.created_at || new Date().toISOString(),
+    createdBy: normalizeUsername(row.createdBy || row.created_by || ""),
+    status: row.status || "completed",
+    storageMode: row.storageMode || row.storage_mode || "local",
+    fileName: row.fileName || row.file_name || "",
+    filePath: row.filePath || row.file_path || "",
+    downloadUrl: row.downloadUrl || row.download_url || "",
+    cloudinaryPublicId: row.cloudinaryPublicId || row.cloudinary_public_id || "",
+    sizeBytes: Number(row.sizeBytes || row.size_bytes || 0),
+    rowCounts: parseJsonField(row.rowCounts || row.row_counts, {}),
+    manifest: parseJsonField(row.manifest, {}),
+    error: row.error || ""
+  };
+}
+
 async function setupPostgresStore() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS inbox_users (
@@ -419,6 +479,7 @@ async function setupPostgresStore() {
     ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT false,
     ADD COLUMN IF NOT EXISTS profile_image_data TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS profile_image_url TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS profile_image_public_id TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS profile_image_mime TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS profile_image_name TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS anonymous_mode BOOLEAN NOT NULL DEFAULT false,
@@ -463,6 +524,10 @@ async function setupPostgresStore() {
   await pool.query(`
     ALTER TABLE messages
     ADD COLUMN IF NOT EXISTS image_data TEXT,
+    ADD COLUMN IF NOT EXISTS image_url TEXT,
+    ADD COLUMN IF NOT EXISTS image_public_id TEXT,
+    ADD COLUMN IF NOT EXISTS image_resource_type TEXT,
+    ADD COLUMN IF NOT EXISTS image_storage TEXT,
     ADD COLUMN IF NOT EXISTS image_mime TEXT,
     ADD COLUMN IF NOT EXISTS image_name TEXT,
     ADD COLUMN IF NOT EXISTS image_size INTEGER
@@ -474,6 +539,15 @@ async function setupPostgresStore() {
     ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'text',
     ADD COLUMN IF NOT EXISTS attachment_data TEXT,
     ADD COLUMN IF NOT EXISTS attachment_url TEXT,
+    ADD COLUMN IF NOT EXISTS attachment_public_id TEXT,
+    ADD COLUMN IF NOT EXISTS attachment_resource_type TEXT,
+    ADD COLUMN IF NOT EXISTS attachment_storage TEXT,
+    ADD COLUMN IF NOT EXISTS media_url TEXT,
+    ADD COLUMN IF NOT EXISTS media_public_id TEXT,
+    ADD COLUMN IF NOT EXISTS media_type TEXT,
+    ADD COLUMN IF NOT EXISTS media_mime TEXT,
+    ADD COLUMN IF NOT EXISTS media_size INTEGER,
+    ADD COLUMN IF NOT EXISTS original_name TEXT,
     ADD COLUMN IF NOT EXISTS attachment_mime TEXT,
     ADD COLUMN IF NOT EXISTS attachment_name TEXT,
     ADD COLUMN IF NOT EXISTS attachment_size INTEGER,
@@ -482,11 +556,6 @@ async function setupPostgresStore() {
     ADD COLUMN IF NOT EXISTS starred_by TEXT NOT NULL DEFAULT '[]',
     ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ
-  `);
-
-  await pool.query(`
-    ALTER TABLE messages
-    ADD COLUMN IF NOT EXISTS image_url TEXT
   `);
 
   await pool.query(`
@@ -672,6 +741,40 @@ async function setupPostgresStore() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS backup_history (
+      id UUID PRIMARY KEY,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      created_by TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'completed',
+      storage_mode TEXT NOT NULL DEFAULT 'local',
+      file_name TEXT NOT NULL DEFAULT '',
+      file_path TEXT NOT NULL DEFAULT '',
+      download_url TEXT NOT NULL DEFAULT '',
+      cloudinary_public_id TEXT NOT NULL DEFAULT '',
+      size_bytes BIGINT NOT NULL DEFAULT 0,
+      row_counts TEXT NOT NULL DEFAULT '{}',
+      manifest TEXT NOT NULL DEFAULT '{}',
+      error TEXT NOT NULL DEFAULT ''
+    )
+  `);
+
+  await pool.query(`
+    ALTER TABLE backup_history
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'completed',
+    ADD COLUMN IF NOT EXISTS storage_mode TEXT NOT NULL DEFAULT 'local',
+    ADD COLUMN IF NOT EXISTS file_name TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS file_path TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS download_url TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS cloudinary_public_id TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS size_bytes BIGINT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS row_counts TEXT NOT NULL DEFAULT '{}',
+    ADD COLUMN IF NOT EXISTS manifest TEXT NOT NULL DEFAULT '{}',
+    ADD COLUMN IF NOT EXISTS error TEXT NOT NULL DEFAULT ''
+  `);
+
+  await pool.query(`
     ALTER TABLE notification_alerts
     ADD COLUMN IF NOT EXISTS recipient_username TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS title TEXT NOT NULL DEFAULT '',
@@ -706,7 +809,9 @@ async function setupPostgresStore() {
 
   await pool.query("CREATE INDEX IF NOT EXISTS idx_inbox_users_username ON inbox_users (username)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_inbox_users_display_name ON inbox_users (display_name)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_inbox_users_role ON inbox_users (role)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_inbox_users_is_online ON inbox_users (is_online)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_inbox_users_online_last_seen ON inbox_users (is_online, last_seen DESC)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_inbox_users_last_seen ON inbox_users (last_seen DESC)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_inbox_users_account_status ON inbox_users (account_status)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_inbox_users_search_hidden ON inbox_users (search_hidden)");
@@ -718,6 +823,9 @@ async function setupPostgresStore() {
   );
   await pool.query(
     "CREATE INDEX IF NOT EXISTS idx_messages_recipient_sender_created_at ON messages (recipient_username, sender_username, created_at DESC)"
+  );
+  await pool.query(
+    "CREATE INDEX IF NOT EXISTS idx_messages_recipient_created_at ON messages (recipient_username, created_at DESC)"
   );
   await pool.query(
     "CREATE INDEX IF NOT EXISTS idx_messages_expiry_unstarred ON messages (expires_at) WHERE expires_at IS NOT NULL AND starred_by = '[]'"
@@ -737,6 +845,7 @@ async function setupPostgresStore() {
   await pool.query("CREATE INDEX IF NOT EXISTS idx_notification_alerts_created ON notification_alerts (created_at DESC)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_notification_alerts_expires ON notification_alerts (expires_at)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_restricted_search_terms_term ON restricted_search_terms (term)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_backup_history_created ON backup_history (created_at DESC)");
 
   await cleanupAnalyticsLogs();
   await seedRestrictedSearchTerms();
@@ -749,6 +858,7 @@ async function setupPostgresStore() {
     await pool.query("VACUUM ANALYZE login_history");
     await pool.query("VACUUM ANALYZE admin_action_logs");
     await pool.query("VACUUM ANALYZE notification_alerts");
+    await pool.query("VACUUM ANALYZE backup_history");
   } catch (error) {
     console.warn("Postgres VACUUM ANALYZE skipped.", error.message);
   }
@@ -924,6 +1034,7 @@ async function listUsers(options = {}) {
         role,
         bio,
         profile_image_url AS "profileImageUrl",
+        profile_image_public_id AS "profileImagePublicId",
         profile_image_mime AS "profileImageMime",
         profile_image_name AS "profileImageName",
         (profile_image_mime <> '' OR profile_image_url <> '') AS "hasProfileImage",
@@ -985,6 +1096,7 @@ async function findUser(username, options = {}) {
           email_verified AS "emailVerified",
           ${profileImageDataSelect}
           profile_image_url AS "profileImageUrl",
+        profile_image_public_id AS "profileImagePublicId",
           profile_image_mime AS "profileImageMime",
           profile_image_name AS "profileImageName",
           (profile_image_mime <> '' OR profile_image_url <> '') AS "hasProfileImage",
@@ -1241,6 +1353,7 @@ async function updateUserSettings(username, settings = {}) {
           email,
           email_verified AS "emailVerified",
           profile_image_url AS "profileImageUrl",
+        profile_image_public_id AS "profileImagePublicId",
           profile_image_mime AS "profileImageMime",
           profile_image_name AS "profileImageName",
           (profile_image_mime <> '' OR profile_image_url <> '') AS "hasProfileImage",
@@ -1309,15 +1422,19 @@ async function updateUserAvatar(username, avatar = null) {
     return null;
   }
 
-  const image = avatar || { data: "", url: "", mime: "", name: "" };
+  const image = avatar || { data: "", url: "", publicId: "", mime: "", name: "" };
 
   if (usePostgres) {
     await initStore();
     const result = await pool.query(
       `
         UPDATE inbox_users
-        SET profile_image_data = $1, profile_image_url = $2, profile_image_mime = $3, profile_image_name = $4
-        WHERE username = $5
+        SET profile_image_data = $1,
+            profile_image_url = $2,
+            profile_image_public_id = $3,
+            profile_image_mime = $4,
+            profile_image_name = $5
+        WHERE username = $6
         RETURNING
           username,
           display_name AS "displayName",
@@ -1327,6 +1444,7 @@ async function updateUserAvatar(username, avatar = null) {
           email,
           email_verified AS "emailVerified",
           profile_image_url AS "profileImageUrl",
+        profile_image_public_id AS "profileImagePublicId",
           profile_image_mime AS "profileImageMime",
           profile_image_name AS "profileImageName",
           (profile_image_mime <> '' OR profile_image_url <> '') AS "hasProfileImage",
@@ -1348,7 +1466,14 @@ async function updateUserAvatar(username, avatar = null) {
           blocked_reason AS "blockedReason",
           search_hidden AS "searchHidden"
       `,
-      [image.data || "", image.url || "", image.mime || "", image.name || "", normalizedUsername]
+      [
+        image.data || "",
+        image.url || "",
+        image.publicId || "",
+        image.mime || "",
+        image.name || "",
+        normalizedUsername
+      ]
     );
 
     return result.rows[0] ? normalizeUser(result.rows[0]) : null;
@@ -1364,6 +1489,7 @@ async function updateUserAvatar(username, avatar = null) {
 
     user.profileImageData = image.data || "";
     user.profileImageUrl = image.url || "";
+    user.profileImagePublicId = image.publicId || "";
     user.profileImageMime = image.mime || "";
     user.profileImageName = image.name || "";
     await writeJsonStore(store);
@@ -1386,6 +1512,7 @@ async function getUserAvatar(username) {
         SELECT
           profile_image_data AS "profileImageData",
           profile_image_url AS "profileImageUrl",
+        profile_image_public_id AS "profileImagePublicId",
           profile_image_mime AS "profileImageMime",
           profile_image_name AS "profileImageName"
         FROM inbox_users
@@ -1403,6 +1530,7 @@ async function getUserAvatar(username) {
     return {
       data: row.profileImageData,
       url: row.profileImageUrl,
+      publicId: row.profileImagePublicId,
       mime: row.profileImageMime || "image/jpeg",
       name: row.profileImageName || "avatar"
     };
@@ -1569,6 +1697,15 @@ async function listConversationMessages(username, peerUsername, query = "") {
           kind,
           attachment_data AS "attachmentData",
           attachment_url AS "attachmentUrl",
+          attachment_public_id AS "attachmentPublicId",
+          attachment_resource_type AS "attachmentResourceType",
+          attachment_storage AS "attachmentStorage",
+          media_url AS "mediaUrl",
+          media_public_id AS "mediaPublicId",
+          media_type AS "mediaType",
+          media_mime AS "mediaMime",
+          media_size AS "mediaSize",
+          original_name AS "originalName",
           attachment_mime AS "attachmentMime",
           attachment_name AS "attachmentName",
           attachment_size AS "attachmentSize",
@@ -1579,6 +1716,9 @@ async function listConversationMessages(username, peerUsername, query = "") {
           read_at AS "readAt",
           image_data AS "imageData",
           image_url AS "imageUrl",
+          image_public_id AS "imagePublicId",
+          image_resource_type AS "imageResourceType",
+          image_storage AS "imageStorage",
           image_mime AS "imageMime",
           image_name AS "imageName",
           image_size AS "imageSize",
@@ -1651,6 +1791,15 @@ async function listLetterMessages(username, query = "") {
           kind,
           attachment_data AS "attachmentData",
           attachment_url AS "attachmentUrl",
+          attachment_public_id AS "attachmentPublicId",
+          attachment_resource_type AS "attachmentResourceType",
+          attachment_storage AS "attachmentStorage",
+          media_url AS "mediaUrl",
+          media_public_id AS "mediaPublicId",
+          media_type AS "mediaType",
+          media_mime AS "mediaMime",
+          media_size AS "mediaSize",
+          original_name AS "originalName",
           attachment_mime AS "attachmentMime",
           attachment_name AS "attachmentName",
           attachment_size AS "attachmentSize",
@@ -1661,6 +1810,9 @@ async function listLetterMessages(username, query = "") {
           read_at AS "readAt",
           image_data AS "imageData",
           image_url AS "imageUrl",
+          image_public_id AS "imagePublicId",
+          image_resource_type AS "imageResourceType",
+          image_storage AS "imageStorage",
           image_mime AS "imageMime",
           image_name AS "imageName",
           image_size AS "imageSize",
@@ -1837,6 +1989,15 @@ async function listMessagesForUser(username, options = {}) {
           kind,
           attachment_data AS "attachmentData",
           attachment_url AS "attachmentUrl",
+          attachment_public_id AS "attachmentPublicId",
+          attachment_resource_type AS "attachmentResourceType",
+          attachment_storage AS "attachmentStorage",
+          media_url AS "mediaUrl",
+          media_public_id AS "mediaPublicId",
+          media_type AS "mediaType",
+          media_mime AS "mediaMime",
+          media_size AS "mediaSize",
+          original_name AS "originalName",
           attachment_mime AS "attachmentMime",
           attachment_name AS "attachmentName",
           attachment_size AS "attachmentSize",
@@ -1847,6 +2008,9 @@ async function listMessagesForUser(username, options = {}) {
           read_at AS "readAt",
           image_data AS "imageData",
           image_url AS "imageUrl",
+          image_public_id AS "imagePublicId",
+          image_resource_type AS "imageResourceType",
+          image_storage AS "imageStorage",
           image_mime AS "imageMime",
           image_name AS "imageName",
           image_size AS "imageSize",
@@ -1912,6 +2076,15 @@ async function addMessage({
           kind,
           attachment_data,
           attachment_url,
+          attachment_public_id,
+          attachment_resource_type,
+          attachment_storage,
+          media_url,
+          media_public_id,
+          media_type,
+          media_mime,
+          media_size,
+          original_name,
           attachment_mime,
           attachment_name,
           attachment_size,
@@ -1922,6 +2095,9 @@ async function addMessage({
           read_at,
           image_data,
           image_url,
+          image_public_id,
+          image_resource_type,
+          image_storage,
           image_mime,
           image_name,
           image_size,
@@ -1932,7 +2108,9 @@ async function addMessage({
           $6, $7, $8, $9, $10,
           $11, $12, $13, $14, $15,
           $16, $17, $18, $19, $20,
-          $21, $22
+          $21, $22, $23, $24, $25,
+          $26, $27, $28, $29, $30,
+          $31, $32, $33, $34
         )
       `,
       [
@@ -1944,6 +2122,15 @@ async function addMessage({
         message.kind,
         message.attachment ? message.attachment.data : null,
         message.attachment ? message.attachment.url : null,
+        message.attachment ? message.attachment.publicId : null,
+        message.attachment ? message.attachment.resourceType : null,
+        message.attachment ? message.attachment.storage : null,
+        message.attachment ? message.attachment.url : null,
+        message.attachment ? message.attachment.publicId : null,
+        message.attachment ? message.kind : null,
+        message.attachment ? message.attachment.mime : null,
+        message.attachment ? message.attachment.size : null,
+        message.attachment ? message.attachment.name : null,
         message.attachment ? message.attachment.mime : null,
         message.attachment ? message.attachment.name : null,
         message.attachment ? message.attachment.size : null,
@@ -1954,6 +2141,9 @@ async function addMessage({
         message.readAt,
         message.image ? message.image.data : null,
         message.image ? message.image.url : null,
+        message.image ? message.image.publicId : null,
+        message.image ? message.image.resourceType : null,
+        message.image ? message.image.storage : null,
         message.image ? message.image.mime : null,
         message.image ? message.image.name : null,
         message.image ? message.image.size : null,
@@ -1989,6 +2179,15 @@ async function findAccessibleMessage(id, username) {
           kind,
           attachment_data AS "attachmentData",
           attachment_url AS "attachmentUrl",
+          attachment_public_id AS "attachmentPublicId",
+          attachment_resource_type AS "attachmentResourceType",
+          attachment_storage AS "attachmentStorage",
+          media_url AS "mediaUrl",
+          media_public_id AS "mediaPublicId",
+          media_type AS "mediaType",
+          media_mime AS "mediaMime",
+          media_size AS "mediaSize",
+          original_name AS "originalName",
           attachment_mime AS "attachmentMime",
           attachment_name AS "attachmentName",
           attachment_size AS "attachmentSize",
@@ -2164,6 +2363,9 @@ async function listStarredMessages(username, options = {}) {
               kind,
               attachment_data AS "attachmentData",
               attachment_url AS "attachmentUrl",
+          attachment_public_id AS "attachmentPublicId",
+          attachment_resource_type AS "attachmentResourceType",
+          attachment_storage AS "attachmentStorage",
               attachment_mime AS "attachmentMime",
               attachment_name AS "attachmentName",
               attachment_size AS "attachmentSize",
@@ -2297,7 +2499,9 @@ async function getStorageSummary() {
       "audit_logs",
       "admin_action_logs",
       "login_history",
-      "user_activity_sessions"
+      "user_activity_sessions",
+      "restricted_search_terms",
+      "backup_history"
     ];
     const result = await pool.query(
       `
@@ -2315,6 +2519,8 @@ async function getStorageSummary() {
                 WHEN 'admin_action_logs' THEN (SELECT COUNT(*) FROM admin_action_logs)
                 WHEN 'login_history' THEN (SELECT COUNT(*) FROM login_history)
                 WHEN 'user_activity_sessions' THEN (SELECT COUNT(*) FROM user_activity_sessions)
+                WHEN 'restricted_search_terms' THEN (SELECT COUNT(*) FROM restricted_search_terms)
+                WHEN 'backup_history' THEN (SELECT COUNT(*) FROM backup_history)
                 ELSE 0
               END
             )
@@ -2330,11 +2536,36 @@ async function getStorageSummary() {
     }));
     const totalBytes = tables.reduce((sum, table) => sum + table.bytes, 0);
 
+    const mediaResult = await pool.query(
+      `
+        SELECT
+          (
+            SELECT COUNT(*) FROM inbox_users WHERE COALESCE(profile_image_data, '') <> ''
+          ) + (
+            SELECT COUNT(*) FROM messages WHERE COALESCE(attachment_data, '') <> '' OR COALESCE(image_data, '') <> ''
+          ) AS db_media_count,
+          (
+            SELECT COUNT(*) FROM inbox_users WHERE COALESCE(profile_image_url, '') <> ''
+          ) + (
+            SELECT COUNT(*) FROM messages WHERE COALESCE(attachment_url, '') <> '' OR COALESCE(image_url, '') <> ''
+          ) AS url_media_count
+      `
+    );
+    const mediaRow = mediaResult.rows[0] || {};
+
     return {
       generatedAt: new Date().toISOString(),
       storage: "postgres",
       totalBytes,
       prettyTotal: formatBytes(totalBytes),
+      stats: {
+        totalUsers: tables.find((table) => table.name === "inbox_users")?.rows || 0,
+        totalMessages: tables.find((table) => table.name === "messages")?.rows || 0,
+        totalNotifications: tables.find((table) => table.name === "notification_alerts")?.rows || 0,
+        auditLogRows: tables.find((table) => table.name === "audit_logs")?.rows || 0,
+        dbStoredMediaCount: Number(mediaRow.db_media_count || 0),
+        urlMediaCount: Number(mediaRow.url_media_count || 0)
+      },
       tables
     };
   }
@@ -2348,20 +2579,38 @@ async function getStorageSummary() {
     fileBytes = Buffer.byteLength(JSON.stringify(store));
   }
 
+  const dbStoredMediaCount =
+    store.users.filter((user) => user.profileImageData).length +
+    store.messages.filter((message) => (message.attachment && message.attachment.data) || message.imageData || message.image_data).length;
+  const urlMediaCount =
+    store.users.filter((user) => user.profileImageUrl).length +
+    store.messages.filter((message) => (message.attachment && message.attachment.url) || message.imageUrl || message.image_url).length;
+  const tables = [
+    { name: "inbox_users", rows: store.users.length, bytes: 0 },
+    { name: "messages", rows: store.messages.length, bytes: 0 },
+    { name: "notification_alerts", rows: (store.notificationAlerts || []).length, bytes: 0 },
+    { name: "audit_logs", rows: (store.auditLogs || []).length, bytes: 0 },
+    { name: "admin_action_logs", rows: (store.adminActionLogs || []).length, bytes: 0 },
+    { name: "login_history", rows: (store.loginHistory || []).length, bytes: 0 },
+    { name: "user_activity_sessions", rows: (store.activitySessions || []).length, bytes: 0 },
+    { name: "restricted_search_terms", rows: (store.restrictedSearchTerms || []).length, bytes: 0 },
+    { name: "backup_history", rows: (store.backupHistory || []).length, bytes: 0 }
+  ];
+
   return {
     generatedAt: new Date().toISOString(),
     storage: "json",
     totalBytes: fileBytes,
     prettyTotal: formatBytes(fileBytes),
-    tables: [
-      { name: "inbox_users", rows: store.users.length, bytes: 0 },
-      { name: "messages", rows: store.messages.length, bytes: 0 },
-      { name: "notification_alerts", rows: (store.notificationAlerts || []).length, bytes: 0 },
-      { name: "audit_logs", rows: (store.auditLogs || []).length, bytes: 0 },
-      { name: "admin_action_logs", rows: (store.adminActionLogs || []).length, bytes: 0 },
-      { name: "login_history", rows: (store.loginHistory || []).length, bytes: 0 },
-      { name: "user_activity_sessions", rows: (store.activitySessions || []).length, bytes: 0 }
-    ]
+    stats: {
+      totalUsers: store.users.length,
+      totalMessages: store.messages.length,
+      totalNotifications: (store.notificationAlerts || []).length,
+      auditLogRows: (store.auditLogs || []).length,
+      dbStoredMediaCount,
+      urlMediaCount
+    },
+    tables
   };
 }
 
@@ -2446,6 +2695,358 @@ async function cleanupStorageLogs() {
     totalSavedBytes,
     totalSaved: formatBytes(totalSavedBytes)
   };
+}
+
+function createMediaManifest(data) {
+  const media = [];
+
+  for (const user of data.inboxUsers || []) {
+    if (user.profileImageUrl || user.profileImageData || user.profile_image_url || user.profile_image_data) {
+      media.push({
+        ownerType: "profile",
+        ownerId: user.username,
+        url: user.profileImageUrl || user.profile_image_url || "",
+        publicId: user.profileImagePublicId || user.profile_image_public_id || "",
+        mime: user.profileImageMime || user.profile_image_mime || "",
+        size: 0,
+        originalName: user.profileImageName || user.profile_image_name || "profile image",
+        storage: user.profileImageUrl || user.profile_image_url ? "cloudinary" : "database",
+        hasEmbeddedData: Boolean(user.profileImageData || user.profile_image_data)
+      });
+    }
+  }
+
+  for (const message of data.messages || []) {
+    const attachment = normalizeAttachment(message);
+
+    if (attachment) {
+      media.push({
+        ownerType: "message",
+        ownerId: message.id,
+        url: attachment.url || "",
+        publicId: attachment.publicId || "",
+        resourceType: attachment.resourceType || "",
+        mime: attachment.mime || "",
+        size: attachment.size || 0,
+        originalName: attachment.name || "attachment",
+        storage: attachment.storage || (attachment.url ? "cloudinary" : "database"),
+        hasEmbeddedData: Boolean(attachment.data)
+      });
+    }
+  }
+
+  return media;
+}
+
+async function createBackupExport({ createdBy = "", appVersion = "" } = {}) {
+  await initStore();
+
+  if (usePostgres) {
+    const [
+      usersResult,
+      messagesResult,
+      notificationsResult,
+      loginsResult,
+      sessionsResult,
+      adminActionsResult,
+      auditResult,
+      restrictedTermsResult,
+      backupHistoryResult
+    ] = await Promise.all([
+      pool.query(`
+        SELECT
+          username,
+          display_name AS "displayName",
+          password_hash AS "passwordHash",
+          role,
+          bio,
+          email,
+          email_verified AS "emailVerified",
+          profile_image_data AS "profileImageData",
+          profile_image_url AS "profileImageUrl",
+          profile_image_public_id AS "profileImagePublicId",
+          profile_image_mime AS "profileImageMime",
+          profile_image_name AS "profileImageName",
+          anonymous_mode AS "anonymousMode",
+          theme,
+          wallpaper,
+          font_style AS "fontStyle",
+          theme_color AS "themeColor",
+          password_changed_at AS "passwordChangedAt",
+          is_online AS "isOnline",
+          last_seen AS "lastSeen",
+          login_time AS "loginTime",
+          logout_time AS "logoutTime",
+          current_session_id AS "currentSessionId",
+          session_duration_seconds AS "sessionDurationSeconds",
+          account_status AS "accountStatus",
+          is_shadow_banned AS "isShadowBanned",
+          suspended_until AS "suspendedUntil",
+          blocked_at AS "blockedAt",
+          blocked_reason AS "blockedReason",
+          search_hidden AS "searchHidden",
+          created_at AS "createdAt"
+        FROM inbox_users
+        ORDER BY username ASC
+      `),
+      pool.query(`
+        SELECT
+          id,
+          text,
+          sender_name AS "senderName",
+          sender_username AS "senderUsername",
+          recipient_username AS "recipientUsername",
+          kind,
+          attachment_data AS "attachmentData",
+          attachment_url AS "attachmentUrl",
+          attachment_public_id AS "attachmentPublicId",
+          attachment_resource_type AS "attachmentResourceType",
+          attachment_storage AS "attachmentStorage",
+          media_url AS "mediaUrl",
+          media_public_id AS "mediaPublicId",
+          media_type AS "mediaType",
+          media_mime AS "mediaMime",
+          media_size AS "mediaSize",
+          original_name AS "originalName",
+          attachment_mime AS "attachmentMime",
+          attachment_name AS "attachmentName",
+          attachment_size AS "attachmentSize",
+          reply_to_id AS "replyToId",
+          reactions,
+          starred_by AS "starredBy",
+          expires_at AS "expiresAt",
+          read_at AS "readAt",
+          image_data AS "imageData",
+          image_url AS "imageUrl",
+          image_public_id AS "imagePublicId",
+          image_resource_type AS "imageResourceType",
+          image_storage AS "imageStorage",
+          image_mime AS "imageMime",
+          image_name AS "imageName",
+          image_size AS "imageSize",
+          created_at AS "createdAt"
+        FROM messages
+        ORDER BY created_at ASC
+      `),
+      pool.query(`
+        SELECT id, recipient_username AS "recipientUsername", title, message, type,
+          created_at AS "createdAt", expires_at AS "expiresAt", seen, sent_by AS "sentBy"
+        FROM notification_alerts
+        ORDER BY created_at ASC
+      `),
+      pool.query(`
+        SELECT id, username, success, reason, suspicious, suspicious_reason AS "suspiciousReason",
+          session_id AS "sessionId", ip_address AS "ipAddress", country, state, city,
+          location_timezone AS "locationTimezone", isp, vpn_proxy AS "vpnProxy",
+          device_type AS "deviceType", operating_system AS "operatingSystem", browser,
+          browser_version AS "browserVersion", user_agent AS "userAgent", created_at AS "createdAt"
+        FROM login_history
+        ORDER BY created_at ASC
+      `),
+      pool.query(`
+        SELECT id, username, session_id AS "sessionId", login_time AS "loginTime",
+          logout_time AS "logoutTime", last_seen AS "lastSeen", duration_seconds AS "durationSeconds",
+          is_active AS "isActive", ip_address AS "ipAddress", country, state, city,
+          location_timezone AS "locationTimezone", isp, vpn_proxy AS "vpnProxy",
+          device_type AS "deviceType", operating_system AS "operatingSystem", browser,
+          browser_version AS "browserVersion", user_agent AS "userAgent",
+          screen_width AS "screenWidth", screen_height AS "screenHeight",
+          device_pixel_ratio AS "devicePixelRatio", language, client_timezone AS "clientTimezone",
+          online_state AS "onlineState", created_at AS "createdAt"
+        FROM user_activity_sessions
+        ORDER BY created_at ASC
+      `),
+      pool.query(`
+        SELECT id, admin_username AS "adminUsername", action, target_username AS "targetUsername",
+          details, ip_address AS "ipAddress", created_at AS "createdAt"
+        FROM admin_action_logs
+        ORDER BY created_at ASC
+      `),
+      pool.query(`
+        SELECT id, table_name AS "tableName", action, row_id AS "rowId", details, created_at AS "createdAt"
+        FROM audit_logs
+        WHERE UPPER(action) = 'DELETE'
+           OR table_name NOT IN ('messages', 'media', 'message_media', 'attachments')
+        ORDER BY created_at DESC
+        LIMIT 1000
+      `),
+      pool.query(`
+        SELECT id, term, created_at AS "createdAt", created_by AS "createdBy"
+        FROM restricted_search_terms
+        ORDER BY term ASC
+      `),
+      pool.query(`
+        SELECT id, created_at AS "createdAt", created_by AS "createdBy", status,
+          storage_mode AS "storageMode", file_name AS "fileName", file_path AS "filePath",
+          download_url AS "downloadUrl", cloudinary_public_id AS "cloudinaryPublicId",
+          size_bytes AS "sizeBytes", row_counts AS "rowCounts", manifest, error
+        FROM backup_history
+        ORDER BY created_at DESC
+        LIMIT 50
+      `)
+    ]);
+
+    const data = {
+      inboxUsers: usersResult.rows,
+      messages: messagesResult.rows.map(normalizeMessage),
+      notificationAlerts: notificationsResult.rows.map(normalizeNotification),
+      loginHistory: loginsResult.rows.map(normalizeLoginRecord),
+      userActivitySessions: sessionsResult.rows.map(normalizeSessionRecord),
+      adminActionLogs: adminActionsResult.rows.map(normalizeAdminAction),
+      importantAuditLogs: auditResult.rows,
+      restrictedSearchTerms: restrictedTermsResult.rows,
+      backupHistory: backupHistoryResult.rows.map(normalizeBackupRecord)
+    };
+    const mediaManifest = createMediaManifest(data);
+    const rowCounts = {
+      inbox_users: data.inboxUsers.length,
+      messages: data.messages.length,
+      notification_alerts: data.notificationAlerts.length,
+      login_history: data.loginHistory.length,
+      user_activity_sessions: data.userActivitySessions.length,
+      admin_action_logs: data.adminActionLogs.length,
+      important_audit_logs: data.importantAuditLogs.length,
+      restricted_search_terms: data.restrictedSearchTerms.length,
+      backup_history: data.backupHistory.length,
+      media_manifest: mediaManifest.length
+    };
+
+    return {
+      createdAt: new Date().toISOString(),
+      createdBy: normalizeUsername(createdBy),
+      database: process.env.DATABASE_URL ? "postgres" : "json",
+      appVersion,
+      rowCounts,
+      mediaManifest,
+      ...data
+    };
+  }
+
+  const store = await readJsonStore();
+  const data = {
+    inboxUsers: store.users,
+    messages: store.messages,
+    notificationAlerts: store.notificationAlerts || [],
+    loginHistory: store.loginHistory || [],
+    userActivitySessions: store.activitySessions || [],
+    adminActionLogs: store.adminActionLogs || [],
+    importantAuditLogs: (store.auditLogs || [])
+      .filter((item) => String(item.action || "").toUpperCase() === "DELETE" || !["messages", "media", "message_media", "attachments"].includes(String(item.tableName || item.table_name || "")))
+      .slice(-1000),
+    restrictedSearchTerms: store.restrictedSearchTerms || [],
+    backupHistory: store.backupHistory || []
+  };
+  const mediaManifest = createMediaManifest(data);
+  const rowCounts = {
+    inbox_users: data.inboxUsers.length,
+    messages: data.messages.length,
+    notification_alerts: data.notificationAlerts.length,
+    login_history: data.loginHistory.length,
+    user_activity_sessions: data.userActivitySessions.length,
+    admin_action_logs: data.adminActionLogs.length,
+    important_audit_logs: data.importantAuditLogs.length,
+    restricted_search_terms: data.restrictedSearchTerms.length,
+    backup_history: data.backupHistory.length,
+    media_manifest: mediaManifest.length
+  };
+
+  return {
+    createdAt: new Date().toISOString(),
+    createdBy: normalizeUsername(createdBy),
+    database: "json",
+    appVersion,
+    rowCounts,
+    mediaManifest,
+    ...data
+  };
+}
+
+async function recordBackupMetadata(record) {
+  const backup = normalizeBackupRecord(record);
+
+  if (usePostgres) {
+    await initStore();
+    const result = await pool.query(
+      `
+        INSERT INTO backup_history (
+          id, created_at, created_by, status, storage_mode, file_name, file_path,
+          download_url, cloudinary_public_id, size_bytes, row_counts, manifest, error
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        RETURNING
+          id,
+          created_at AS "createdAt",
+          created_by AS "createdBy",
+          status,
+          storage_mode AS "storageMode",
+          file_name AS "fileName",
+          file_path AS "filePath",
+          download_url AS "downloadUrl",
+          cloudinary_public_id AS "cloudinaryPublicId",
+          size_bytes AS "sizeBytes",
+          row_counts AS "rowCounts",
+          manifest,
+          error
+      `,
+      [
+        backup.id,
+        backup.createdAt,
+        backup.createdBy,
+        backup.status,
+        backup.storageMode,
+        backup.fileName,
+        backup.filePath,
+        backup.downloadUrl,
+        backup.cloudinaryPublicId,
+        backup.sizeBytes,
+        JSON.stringify(backup.rowCounts || {}),
+        JSON.stringify(backup.manifest || {}),
+        backup.error
+      ]
+    );
+    return normalizeBackupRecord(result.rows[0]);
+  }
+
+  return queuedWrite(async () => {
+    const store = await readJsonStore(false);
+    store.backupHistory = [backup, ...(store.backupHistory || [])].slice(0, 100);
+    await writeJsonStore(store);
+    return backup;
+  });
+}
+
+async function listBackupHistory(options = {}) {
+  const limit = clampLimit(options.limit, 20, 100);
+
+  if (usePostgres) {
+    await initStore();
+    const result = await pool.query(
+      `
+        SELECT
+          id,
+          created_at AS "createdAt",
+          created_by AS "createdBy",
+          status,
+          storage_mode AS "storageMode",
+          file_name AS "fileName",
+          file_path AS "filePath",
+          download_url AS "downloadUrl",
+          cloudinary_public_id AS "cloudinaryPublicId",
+          size_bytes AS "sizeBytes",
+          row_counts AS "rowCounts",
+          manifest,
+          error
+        FROM backup_history
+        ORDER BY created_at DESC
+        LIMIT $1
+      `,
+      [limit]
+    );
+    return result.rows.map(normalizeBackupRecord);
+  }
+
+  const store = await readJsonStore();
+  return (store.backupHistory || []).map(normalizeBackupRecord).slice(0, limit);
 }
 
 async function markStaleUsersOffline() {
@@ -2957,6 +3558,7 @@ async function updateUserSecurityStatus(username, updates = {}) {
           role,
           bio,
           profile_image_url AS "profileImageUrl",
+        profile_image_public_id AS "profileImagePublicId",
           profile_image_mime AS "profileImageMime",
           profile_image_name AS "profileImageName",
           (profile_image_mime <> '' OR profile_image_url <> '') AS "hasProfileImage",
@@ -3014,6 +3616,7 @@ async function updateUserSearchVisibility(username, searchHidden) {
           role,
           bio,
           profile_image_url AS "profileImageUrl",
+        profile_image_public_id AS "profileImagePublicId",
           profile_image_mime AS "profileImageMime",
           profile_image_name AS "profileImageName",
           (profile_image_mime <> '' OR profile_image_url <> '') AS "hasProfileImage",
@@ -3141,6 +3744,7 @@ async function getUltimateAdminMonitoring(options = {}) {
             role,
             bio,
             profile_image_url AS "profileImageUrl",
+        profile_image_public_id AS "profileImagePublicId",
             profile_image_mime AS "profileImageMime",
             profile_image_name AS "profileImageName",
             (profile_image_mime <> '' OR profile_image_url <> '') AS "hasProfileImage",
@@ -3705,6 +4309,7 @@ module.exports = {
   cleanupExpiredMessages,
   cleanupAnalyticsLogs,
   closeStore,
+  createBackupExport,
   createNotificationAlert,
   deleteMessage,
   deleteNotificationAlert,
@@ -3718,6 +4323,7 @@ module.exports = {
   getUltimateAdminMonitoring,
   initStore,
   isRestrictedSearchTerm,
+  listBackupHistory,
   listNotificationHistory,
   listChatSummaries,
   listConversationMessages,
@@ -3735,6 +4341,7 @@ module.exports = {
   normalizeUsername,
   heartbeatUserSession,
   recordLoginAttempt,
+  recordBackupMetadata,
   startUserSession,
   subscribeNotificationAlerts,
   toggleMessageReaction,

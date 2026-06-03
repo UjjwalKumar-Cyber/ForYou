@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow, noarchive">
+    <title>Watch Together - ForyoU</title>
+    <link rel="stylesheet" href="/css/styles.css?v=20260603-watch">
+    <script src="/socket.io/socket.io.js" defer></script>
+    <script src="/js/watch-together.js?v=20260603-watch" defer></script>
+  </head>
+  <body class="watch-body">
+    <main class="watch-shell">
+      <section class="watch-hero" aria-labelledby="watch-title">
+        <div>
+          <p class="watch-kicker">Private room</p>
+          <h1 id="watch-title">Watch together</h1>
+          <p>
+            Share this room with one person, paste a YouTube video or Shorts link,
+            and stay synced while you watch.
+          </p>
+        </div>
+        <a class="watch-home-link" href="/admin">ForyoU</a>
+      </section>
+
+      <section class="watch-card watch-room-card" aria-label="Room controls">
+        <label>
+          Your name
+          <input id="watch-name" maxlength="28" autocomplete="nickname" placeholder="Your name">
+        </label>
+
+        <label>
+          Room link
+          <div class="watch-copy-row">
+            <input id="watch-room-link" readonly>
+            <button class="button secondary-button" id="copy-watch-link" type="button">Copy</button>
+          </div>
+        </label>
+
+        <p class="watch-status" id="watch-status">Connecting...</p>
+      </section>
+
+      <section class="watch-card" aria-label="Video controls">
+        <form class="watch-video-form" id="watch-video-form">
+          <label>
+            Video or reel link
+            <input
+              id="watch-url"
+              type="text"
+              placeholder="Paste YouTube, YouTube Shorts, or Instagram Reel link"
+              autocomplete="off"
+            >
+          </label>
+          <button class="button primary-button" type="submit">Start watching</button>
+        </form>
+        <p class="watch-help">
+          YouTube and Shorts sync play, pause, and seek. Instagram Reels can open in the room,
+          but exact playback sync depends on Instagram.
+        </p>
+      </section>
+
+      <section class="watch-stage" aria-label="Watch player">
+        <div class="watch-player-wrap">
+          <div id="youtube-player"></div>
+          <iframe
+            class="watch-instagram-frame is-hidden"
+            id="instagram-player"
+            title="Instagram Reel"
+            loading="lazy"
+            allowtransparency="true"
+            allowfullscreen>
+          </iframe>
+          <div class="watch-empty" id="watch-empty">
+            <span>Paste a link to begin</span>
+          </div>
+        </div>
+
+        <div class="watch-meta">
+          <div>
+            <p class="watch-kicker">Now watching</p>
+            <h2 id="watch-now-title">Nothing yet</h2>
+            <p id="watch-sync-status">Waiting for a video...</p>
+          </div>
+          <button class="button primary-button compact-button" id="sync-now" type="button">Sync now</button>
+        </div>
+      </section>
+
+      <section class="watch-card watch-footer-card" aria-label="Room people and reactions">
+        <div>
+          <p class="watch-kicker">In this room</p>
+          <div class="watch-viewers" id="watch-viewers"></div>
+        </div>
+        <div class="watch-reactions">
+          <button type="button" data-reaction="heart">Heart</button>
+          <button type="button" data-reaction="miss-you">Miss you</button>
+          <button type="button" data-reaction="cute">Cute</button>
+        </div>
+      </section>
+
+      <div class="watch-toast-stack" id="watch-toast-stack" aria-live="polite"></div>
+    </main>
+  </body>
+</html>

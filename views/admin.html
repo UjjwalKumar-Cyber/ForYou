@@ -8,7 +8,7 @@
     <title>ForyoU Letters</title>
     <link rel="manifest" href="/manifest.webmanifest">
     <link rel="preload" href="/assets/seal.svg" as="image" type="image/svg+xml">
-    <link rel="stylesheet" href="/css/styles.css?v=20260516-privacy4">
+    <link rel="stylesheet" href="/css/styles.css?v=20260516-backup5">
   </head>
   <body>
     <main class="page-shell admin-shell">
@@ -157,10 +157,20 @@
 
               <div class="monitor-stats" id="monitor-stats" aria-label="Security monitoring stats"></div>
               <div class="monitor-toolbar">
-                <button class="button secondary-button compact-button" id="cleanup-storage-button" type="button">Clean Storage</button>
                 <button class="button secondary-button compact-button" id="monitor-refresh-button" type="button">Update</button>
               </div>
-              <p class="file-hint cleanup-warning">This deletes logs only. Messages, users, memories and media stay safe.</p>
+
+              <p class="drawer-label">Storage & Backup</p>
+              <div class="storage-summary-grid" id="storage-summary-grid"></div>
+              <div class="monitor-toolbar">
+                <button class="button primary-button compact-button" id="backup-now-button" type="button">Backup Now</button>
+                <button class="button secondary-button compact-button" id="cleanup-storage-button" type="button">Clean Old Logs</button>
+              </div>
+              <p class="file-hint cleanup-warning">Backups exclude secrets. Log cleanup deletes logs only; messages, users, memories and media stay safe.</p>
+              <div class="storage-table-list" id="storage-table-list"></div>
+              <p class="drawer-label">Backup history</p>
+              <div class="backup-history-list" id="backup-history-list"></div>
+              <p class="form-message" id="backup-status" role="status" aria-live="polite"></p>
               <p class="form-message" id="cleanup-storage-status" role="status" aria-live="polite"></p>
 
               <p class="drawer-label">Popup alerts</p>
@@ -240,6 +250,6 @@
     </template>
 
     <script src="/socket.io/socket.io.js" defer></script>
-    <script src="/js/admin.js?v=20260516-privacy4" defer></script>
+    <script src="/js/admin.js?v=20260516-backup5" defer></script>
   </body>
 </html>
