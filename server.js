@@ -322,7 +322,7 @@ const sessionStore = PgSession
   ? new PgSession({
       conString: process.env.DATABASE_URL,
       createTableIfMissing: true,
-      tableName: "session",
+      tableName: process.env.SESSION_TABLE || "foryou_sessions",
       ttl: 365 * 24 * 60 * 60
     })
   : undefined;
