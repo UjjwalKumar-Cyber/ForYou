@@ -8,7 +8,7 @@
     <title>ForyoU Letters</title>
     <link rel="manifest" href="/manifest.webmanifest">
     <link rel="preload" href="/assets/seal.svg" as="image" type="image/svg+xml">
-    <link rel="stylesheet" href="/css/styles.css?v=20260516-backup5">
+    <link rel="stylesheet" href="/css/styles.css?v=20260603-integrated">
   </head>
   <body>
     <main class="page-shell admin-shell">
@@ -69,6 +69,7 @@
               </div>
             </div>
             <div class="conversation-actions">
+              <button class="button secondary-button compact-button" id="watch-together-button" type="button" disabled>Watch</button>
               <button class="button secondary-button compact-button" id="view-profile-button" type="button">View profile</button>
               <button class="button secondary-button compact-button" id="starred-button" type="button">Starred</button>
             </div>
@@ -204,6 +205,7 @@
             </div>
 
             <div class="drawer-actions">
+              <a class="button primary-button link-button" href="/watch-together">Watch together</a>
               <a class="button secondary-button link-button" href="/profile">Profile settings</a>
               <button class="button secondary-button" id="refresh-button" type="button">Refresh</button>
               <button class="button secondary-button" id="logout-button" type="button">Logout</button>
@@ -250,6 +252,6 @@
     </template>
 
     <script src="/socket.io/socket.io.js" defer></script>
-    <script src="/js/admin.js?v=20260516-backup5" defer></script>
+    <script src="/js/admin.js?v=20260603-integrated" defer></script>
   </body>
 </html>

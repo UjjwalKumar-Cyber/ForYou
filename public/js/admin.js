@@ -39,6 +39,7 @@ const peerName = document.querySelector("#peer-name");
 const peerStatus = document.querySelector("#peer-status");
 const backChatButton = document.querySelector("#back-chat-button");
 const viewProfileButton = document.querySelector("#view-profile-button");
+const watchTogetherButton = document.querySelector("#watch-together-button");
 const peerProfilePanel = document.querySelector("#peer-profile-panel");
 const peerProfileBackdrop = document.querySelector("#peer-profile-backdrop");
 const peerProfileClose = document.querySelector("#peer-profile-close");
@@ -318,6 +319,41 @@ function currentPeerProfile() {
 
   const conversation = conversations.find((item) => item.peerUsername === currentPeer);
   return conversation ? conversationDisplay(conversation) : getRecipient(currentPeer);
+}
+
+function watchRoomHash(value) {
+  let hash = 2166136261;
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  return (hash >>> 0).toString(36).toUpperCase();
+}
+
+function conversationWatchRoomId() {
+  if (!currentUser || !currentUser.username || !currentPeer || currentPeer === "__letters__") {
+    return "";
+  }
+
+  const pairKey = [currentUser.username, currentPeer]
+    .map((value) => String(value || "").trim().toLowerCase())
+    .sort()
+    .join(":");
+
+  return `FORYOU-${watchRoomHash(pairKey)}`;
+}
+
+function openWatchTogether() {
+  const roomId = conversationWatchRoomId();
+
+  if (!roomId) {
+    showSoftAlert("Open a chat first, then start Watch Together.");
+    return;
+  }
+
+  window.open(`/watch/${encodeURIComponent(roomId)}`, "_blank", "noopener,noreferrer");
 }
 
 function openPeerProfile() {
@@ -908,6 +944,7 @@ function updatePeerHeader() {
     messageSearch.disabled = true;
     accountMessageForm.classList.add("is-hidden");
     viewProfileButton.disabled = true;
+    watchTogetherButton.disabled = true;
     return;
   }
 
@@ -923,6 +960,7 @@ function updatePeerHeader() {
     peerStatus.textContent = "";
     starredButton.disabled = false;
     viewProfileButton.disabled = true;
+    watchTogetherButton.disabled = true;
     messageSearch.disabled = false;
     accountMessageForm.classList.add("is-hidden");
     return;
@@ -931,6 +969,7 @@ function updatePeerHeader() {
   peerStatus.textContent = isUltimateAdminUser(currentUser) && peer && peer.isActive ? "Active now" : "";
   starredButton.disabled = false;
   viewProfileButton.disabled = false;
+  watchTogetherButton.disabled = false;
   messageSearch.disabled = false;
   accountMessageForm.classList.remove("is-hidden");
   accountRecipient.value = currentPeer;
@@ -1961,6 +2000,7 @@ cleanupStorageButton?.addEventListener("click", cleanStorage);
 notificationForm?.addEventListener("submit", sendAdminNotification);
 backChatButton.addEventListener("click", closeConversation);
 viewProfileButton.addEventListener("click", openPeerProfile);
+watchTogetherButton.addEventListener("click", openWatchTogether);
 peerProfileClose.addEventListener("click", closePeerProfile);
 peerProfileBackdrop.addEventListener("click", closePeerProfile);
 menuButton.addEventListener("click", openDrawer);
