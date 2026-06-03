@@ -102,6 +102,8 @@ let mediaRecorder = null;
 let recordingChunks = [];
 let hasOlderMessages = false;
 let loadingOlderMessages = false;
+let activeWatchRoomId = "";
+let watchInviteCooldownUntil = 0;
 const displayedNotificationIds = new Set();
 
 function setStatus(text, type = "neutral") {
@@ -349,6 +351,23 @@ function conversationWatchRoomId() {
   return `FORYOU-${watchRoomHash(pairKey)}`;
 }
 
+function watchRoomFromUrl() {
+  const roomId = new URLSearchParams(window.location.search).get("watchRoom") || "";
+  return /^[a-zA-Z0-9_-]{4,48}$/.test(roomId) ? roomId : "";
+}
+
+function openPendingWatchRoom() {
+  const roomId = watchRoomFromUrl();
+
+  if (!roomId || !currentUser) {
+    return;
+  }
+
+  window.history.replaceState(null, "", "/admin");
+  openInAppWatch(roomId, "Private watch room");
+  showSoftAlert("Watch room opened after login.");
+}
+
 function openInAppWatch(roomId, label = "Private room") {
   if (!roomId) {
     showSoftAlert("Open a chat first, then start Watch Together.");
@@ -364,6 +383,12 @@ function openInAppWatch(roomId, label = "Private room") {
     return;
   }
 
+  if (activeWatchRoomId === roomId && !watchInAppPanel.classList.contains("is-hidden")) {
+    showSoftAlert("Watch Together is already open.");
+    return;
+  }
+
+  activeWatchRoomId = roomId;
   watchInAppTitle.textContent = label;
   watchInAppFrame.src = roomPath;
   watchInAppPanel.classList.remove("is-hidden");
@@ -378,6 +403,7 @@ function closeInAppWatch() {
   watchInAppPanel.classList.add("is-hidden");
   watchInAppPanel.setAttribute("aria-hidden", "true");
   watchInAppFrame.src = "";
+  activeWatchRoomId = "";
 }
 
 function openWatchTogether() {
@@ -392,6 +418,11 @@ function openWatchTogether() {
   openInAppWatch(roomId, peer ? `With ${peer.displayName || peer.username}` : "Private room");
 
   if (socket && currentPeer && currentPeer !== "__letters__") {
+    if (Date.now() < watchInviteCooldownUntil) {
+      return;
+    }
+
+    watchInviteCooldownUntil = Date.now() + 1500;
     socket.emit("watch:invite", {
       recipientUsername: currentPeer,
       roomId
@@ -1192,6 +1223,7 @@ async function loadSession() {
 
     showMessagesPanel();
     document.getElementById("admin-loading-panel")?.classList.add("is-hidden");
+    openPendingWatchRoom();
 
     return true;
   } catch {
@@ -2043,6 +2075,7 @@ loginForm.addEventListener("submit", async (event) => {
     await loadAdminNotifications();
     await loadStorageSummary();
     await loadBackups();
+    openPendingWatchRoom();
   } catch {
     setLoginMessage("Network error. Please try again.", "error");
   } finally {

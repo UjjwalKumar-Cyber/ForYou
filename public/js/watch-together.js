@@ -470,7 +470,7 @@
     });
 
     socket.on("connect_error", () => {
-      setStatus("Could not connect. Refresh once.", "error");
+      setStatus("Please log in to ForyoU first, then reopen Watch Together.", "error");
     });
 
     socket.on("watch:state", async ({ state, reason }) => {

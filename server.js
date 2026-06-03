@@ -226,7 +226,7 @@ const cspDirectives = {
   connectSrc: ["'self'"],
   fontSrc: ["'self'"],
   formAction: ["'self'"],
-  frameAncestors: ["'none'"],
+  frameAncestors: ["'self'"],
   imgSrc: ["'self'", "data:", "https:"],
   mediaSrc: ["'self'", "data:", "blob:", "https:"],
   objectSrc: ["'none'"],
@@ -478,6 +478,19 @@ async function requireAccount(req, res, next) {
   } catch (error) {
     return next(error);
   }
+}
+
+async function requireWatchPage(req, res, next) {
+  const username = normalizeUsername(req.session.accountUser && req.session.accountUser.username);
+
+  if (!username) {
+    noStore(res);
+    const roomId = cleanWatchRoomId(req.params.room || "");
+    const query = roomId ? `?watchRoom=${encodeURIComponent(roomId)}` : "";
+    return res.redirect(302, `/admin${query}`);
+  }
+
+  return requireAccount(req, res, next);
 }
 
 async function requireUltimateAdmin(req, res, next) {
@@ -1495,6 +1508,29 @@ function cleanOldWatchRooms() {
 
 const watchNamespace = io.of("/watch");
 
+watchNamespace.use(async (socket, next) => {
+  const accountUser = socket.request.session && socket.request.session.accountUser;
+
+  if (!accountUser || !accountUser.username) {
+    return next(new Error("login_required"));
+  }
+
+  try {
+    const user = await findUser(accountUser.username);
+
+    if (!user || isAccountBlocked(user)) {
+      return next(new Error("login_required"));
+    }
+
+    socket.accountUser = publicAccount(user);
+    socket.request.session.accountUser = socket.accountUser;
+    markUserActive(socket.accountUser);
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+});
+
 watchNamespace.on("connection", (socket) => {
   socket.on("watch:join", (payload = {}, callback) => {
     const roomId = cleanWatchRoomId(payload.roomId);
@@ -1506,14 +1542,23 @@ watchNamespace.on("connection", (socket) => {
       return;
     }
 
-    const accountUser = socket.request.session && socket.request.session.accountUser;
-    const username = normalizeUsername(accountUser && accountUser.username ? accountUser.username : payload.username);
+    const accountUser = socket.accountUser || (socket.request.session && socket.request.session.accountUser);
+    const username = normalizeUsername(accountUser && accountUser.username);
+
+    if (!username) {
+      if (typeof callback === "function") {
+        callback({ ok: false, error: "Please log in to join this private watch room." });
+      }
+      socket.disconnect(true);
+      return;
+    }
+
     const displayName = cleanWatchDisplayName(
       accountUser && accountUser.displayName
         ? accountUser.displayName
         : payload.displayName
     );
-    const viewerKey = cleanWatchRoomId(payload.viewerKey) || socket.id;
+    const viewerKey = username;
     const room = getWatchRoom(roomId);
     const viewerKeys = new Set(Array.from(room.viewers.values()).map((viewer) => viewer.viewerKey));
 
@@ -2077,7 +2122,7 @@ app.get("/profile", (req, res) => {
   sendView(res, "profile.html");
 });
 
-app.get(["/watch-together", "/watch/:room"], (req, res) => {
+app.get(["/watch-together", "/watch/:room"], requireWatchPage, (req, res) => {
   sendView(res, "watch-together.html");
 });
 
