@@ -92,8 +92,8 @@ cp .env.example .env
 Edit `.env`:
 
 ```bash
-SERVICE_DISCONTINUED=false
-ENABLE_DISCONTINUED_MODE=false
+SERVICE_DISCONTINUED=true
+ENABLE_DISCONTINUED_MODE=true
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=your-admin-password
 SESSION_SECRET=generate-a-long-random-string
@@ -102,16 +102,18 @@ ENABLE_SECRET_PAGE=false
 
 ## Service Mode
 
-The project is currently set to live mode with:
+The project is currently archived/discontinued. The server is hard-locked in
+archive mode in `server.js`, so public users see the archived service notice and
+cannot log in, send messages, upload media, open watch rooms, or use account
+actions.
 
 ```bash
-SERVICE_DISCONTINUED=false
-ENABLE_DISCONTINUED_MODE=false
+SERVICE_DISCONTINUED=true
+ENABLE_DISCONTINUED_MODE=true
 ```
 
-In live mode, `/admin`, `/profile`, chats, admin tools, and `/watch-together`
-are available. To temporarily show only the discontinued notice later, set
-both `SERVICE_DISCONTINUED=true` and `ENABLE_DISCONTINUED_MODE=true`, then redeploy.
+To restore live mode later, remove the `ARCHIVE_MODE_LOCKED = true` lock in
+`server.js`, set both discontinued environment variables to `false`, and redeploy.
 
 Generate a session secret:
 
@@ -160,9 +162,8 @@ npm run dev
 
 Open:
 
-- Main login/inbox: `http://localhost:3000/admin`
-- Old secret URL redirects to login: `http://localhost:3000/secret-8392-love-note`
-- Profile settings: `http://localhost:3000/profile`
+- Archived notice: `http://localhost:3000/`
+- Any normal app route, including `/admin`, `/profile`, and `/watch-together`, returns the archived notice while archive mode is locked.
 
 If no `.env` is present, development fallback passwords are:
 
@@ -292,9 +293,8 @@ Your live URL may look like `https://foryou-zbm5.onrender.com`; the service name
 
 After deployment:
 
-- Main login/inbox: `https://your-render-url/admin`
-- Old secret URL redirects to login: `https://your-render-url/secret-8392-love-note`
-- Profile settings: `https://your-render-url/profile`
+- Archived notice: `https://your-render-url/`
+- Any normal app route, including `/admin`, `/profile`, and `/watch-together`, returns the archived notice while archive mode is locked.
 
 ## Privacy Notes
 
